@@ -8,3 +8,6 @@ dist/
 build/
 .venv/
 venv/
+*.pid
+ui_*.log
+*_run.log*

@@ -915,6 +915,12 @@ h4 { font-size: 1em !important; font-weight: 600 !important; color: var(--text-h
   box-shadow: none !important;
 }
 /* Other containers: no glass */
+gradio-app,
+.gradio-app,
+.gradio-container .app {
+  background: transparent !important;
+  color: var(--text-body) !important;
+}
 .gradio-container .gr-form,
 .gradio-container [data-testid="block"],
 .gradio-container [class*="container"]:not(.gradio-container),
@@ -926,6 +932,80 @@ h4 { font-size: 1em !important; font-weight: 600 !important; color: var(--text-h
   border: none !important;
   border-radius: 0 !important;
   box-shadow: none !important;
+}
+
+/* ── Kill white boxes on File / Dataframe / Markdown / Code containers ─── */
+.gradio-container [class*="file"],
+.gradio-container [class*="File"],
+.gradio-container [class*="dataframe"],
+.gradio-container [class*="Dataframe"],
+.gradio-container [class*="markdown"],
+.gradio-container [class*="Markdown"],
+.gradio-container [class*="code"],
+.gradio-container [class*="Code"],
+.gradio-container [class*="json"],
+.gradio-container [class*="Json"],
+.gradio-container .prose,
+.gradio-container [class*="wrap"][class*="svelte-"],
+.gradio-container [class*="upload"],
+.gradio-container [class*="download"],
+.gradio-container [class*="file-label"],
+.gradio-container [data-testid="file"] {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* ── File empty-value placeholder: completely invisible ────────────────── */
+.gradio-container .empty,
+.gradio-container div[aria-label="Empty value"] {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  min-height: 0 !important;
+  outline: none !important;
+}
+.gradio-container .empty .icon,
+.gradio-container div[aria-label="Empty value"] .icon {
+  opacity: 0.25 !important;
+}
+
+/* ── Kill tan/cream block on native form wrappers (Gradio 6.22) ───────── */
+.gradio-container .form,
+.gradio-container .gradio-container .form,
+.gradio-container form,
+.gradio-container .gradio-container [class*="field"],
+.gradio-container .gradio-container [class*="textbox-wrap"] {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+.gradio-container .form .input-container,
+.gradio-container form .input-container {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* ── File / component label chip: transparent, no colored pill ─────────── */
+.gradio-container label[data-testid="block-label"],
+.gradio-container .gradio-container [data-testid="block-label"],
+.gradio-container div[data-testid="block-label"] {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 2px 0 4px !important;
+}
+.gradio-container label[data-testid="block-label"] span:first-child svg {
+  width: 14px !important;
+  height: 14px !important;
 }
 
 /* ── Inputs: minimal line border ─────────────────────────────────────── */
@@ -1210,8 +1290,9 @@ if __name__ == "__main__":
         neutral_hue="stone",
     ).set(
         body_background_fill="*neutral_50",
-        block_background_fill="white",
+        block_background_fill="transparent",
         block_border_width="0px",
+        block_label_background_fill="transparent",
         button_primary_background_fill="rgba(255, 248, 235, 0.65)",
         button_primary_text_color="#5C3D2E",
         button_primary_border_color="rgba(255, 200, 140, 0.35)",
