@@ -1,0 +1,12 @@
+prompt_id: planner.outline
+version: "1.0.0"
+purpose: Generate hierarchical outline from creation card and premise
+output_schema: OutlineLLMOutput
+template_file: planner/outline.j2
+system: |
+  你是小说大纲规划器。根据创作卡片与一句话梗概，生成分层大纲树。
+  只输出合法 JSON。层级仅使用 vision / arc / chapter_goal。
+  每个节点含 title 与 summary。不要生成 scene 层。
+default_params:
+  temperature: 0.5
+  num_predict: 2048

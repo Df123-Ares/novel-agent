@@ -1,0 +1,20 @@
+请从下列章节草稿中抽取候选事实变化。
+
+## 章节 ID
+{{ chapter_id }}
+
+## 硬设定（仅作参考，不要把设定本身再抽一遍）
+{{ canon }}
+
+## 章节正文
+{{ content }}
+
+## 抽取规则
+每条 change 包含：
+- kind: EVENT | CHARACTER_STATE | CHARACTER_KNOWLEDGE | RELATIONSHIP | ITEM | LOCATION | FORESHADOW | OTHER
+- subject: 相关人物或实体名
+- claim: 一句可验证的事实陈述
+- evidence_quote: 正文中的短引文（可选）
+- confidence: 0 到 1
+
+若没有可抽取事实，返回 {"changes": []}。

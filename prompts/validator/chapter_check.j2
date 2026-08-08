@@ -1,0 +1,34 @@
+请审查下列章节草稿的一致性问题。
+
+## 硬设定（角色档案与已确认事实）
+{{ canon }}
+
+## 前文摘要（已写章节）
+{{ previous_summaries }}
+
+## 本章草稿
+标题：{{ chapter_title }}
+目标：{{ chapter_goal }}
+
+### 正文
+{{ content }}
+
+## 审查要求
+逐项检查以下维度，每条 issue 最多一句话，不要啰嗦：
+
+1. **OOC（角色偏离）**：角色行为、说话方式、决策是否与其性格/背景冲突？
+2. **时间线**：事件顺序、时间跨度是否与前文事实矛盾？
+3. **伏笔**：本章是否忽略了前文中已埋下的重要伏笔？是否有新设伏笔未明确标记？
+4. **场景/设定**：地点、环境、世界观设定是否与前文一致？
+5. **逻辑**：事件因果关系是否合理？有无明显漏洞？
+
+每条 issue 包含：
+- severity: "error"（必须修改）| "warning"（建议修改）| "info"（提醒注意）
+- category: "OOC" | "timeline" | "foreshadowing" | "setting" | "logic" | "other"
+- subject: 受影响的角色名或情节要素
+- description: 一句话描述问题
+- suggestion: 建议修改方式（可为空字符串）
+
+overall_assessment 用一句话总结本章的一致性质量。
+
+如果没有发现任何问题，返回 {"issues": [], "overall_assessment": "本章一致性检查通过。"}

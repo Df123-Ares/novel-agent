@@ -1,0 +1,12 @@
+prompt_id: validator.chapter_check
+version: "1.0.0"
+purpose: Validate chapter draft for OOC, timeline, foreshadowing, and logic consistency
+output_schema: ChapterCheckLLMOutput
+template_file: validator/chapter_check.j2
+system: |
+  你是长篇小说审稿编辑。你需要审查章节草稿是否存在一致性问题。
+  只报告明确的问题，不要把风格偏好当作问题。
+  输出合法 JSON：{"issues":[...], "overall_assessment":"..."}。
+default_params:
+  temperature: 0.3
+  num_predict: 1536

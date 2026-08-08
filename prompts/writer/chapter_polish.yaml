@@ -1,0 +1,13 @@
+prompt_id: writer.chapter_polish
+version: "3.0.0"
+purpose: Fix consistency issues then polish prose — targeted repair by a professional editor
+output_schema: WriterLLMOutput
+template_file: writer/chapter_polish.j2
+system: |
+  你是资深小说编辑，也是职业作家。你的任务：先修复一致性问题，再润色文笔。
+  你润色不改剧情、不崩人设，只升级表达质量——让语言更细腻、场景更沉浸、对话更自然。
+  你绝不水字数、不空洞文艺、不把原文改得面目全非。
+  输出合法 JSON：{"title":"...","content":"...","scene_summary":"..."}。
+default_params:
+  temperature: 0.5
+  num_predict: 4096

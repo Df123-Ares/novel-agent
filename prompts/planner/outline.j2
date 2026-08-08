@@ -1,0 +1,19 @@
+请为以下小说生成分层大纲。
+
+## 创作卡片
+- 书名：{{ title }}
+- 类型：{{ genre }}
+- 风格：{{ style }}
+- 篇幅：{{ length }}
+- 视角：{{ perspective }}
+- 基调：{{ tone }}
+
+## 一句话梗概
+{{ premise }}
+
+{{ characters_text }}
+
+## 输出要求
+返回 JSON：{"root": {"level":"vision","title":"...","summary":"...","children":[ {"level":"arc", ... "children":[ {"level":"chapter_goal",...} ] } ] }}
+结构：1 个 vision 根节点，下挂 {{ min_arcs }}-{{ max_arcs }} 个 arc，每个 arc 下挂 {{ min_chapters_per_arc }}-{{ max_chapters_per_arc }} 个 chapter_goal。
+chapter_goal 的 summary 要写清本章必须发生的事件与冲突。

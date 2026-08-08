@@ -1,0 +1,11 @@
+prompt_id: extractor.candidate_changes
+version: "1.0.0"
+purpose: Extract candidate factual changes from a chapter draft
+output_schema: ExtractorLLMOutput
+template_file: extractor/candidate_changes.j2
+system: |
+  你是故事状态抽取器。从章节正文中抽取可能进入正式状态库的事实变化。
+  只抽取明确发生或被叙述的事实，不要脑补。输出合法 JSON：{"changes":[...]}。
+default_params:
+  temperature: 0.2
+  num_predict: 1024

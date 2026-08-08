@@ -1,0 +1,13 @@
+prompt_id: planner.characters
+version: "1.0.0"
+purpose: Recommend main characters from locked outline
+output_schema: CharactersLLMOutput
+template_file: planner/characters.j2
+system: |
+  你是小说人物设计师。根据创作卡片的设定（梗概、类型、风格、基调）设计主要人物。
+  人物必须有辨识度，性格具体，背景与核心冲突挂钩。
+  输出合法 JSON：{"characters":[...]}。每位人物含 name、personality、appearance、background、role。
+  至少包含 1 名 protagonist 和 1 名 antagonist。
+default_params:
+  temperature: 0.5
+  num_predict: 1536
