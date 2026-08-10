@@ -358,7 +358,7 @@ jjGenCharsBtn.addEventListener('click', async function() {
     try {
         const data = await postJSON('/api/guided/characters/generate', { bookId: jjBookId });
         showStatus('jjCharsStatus', `<span class="${data.error ? 'status-err' : 'status-ok'}">${escapeHtml(data.status || data.error || '')}</span>`);
-        renderCharacters(data.characters);
+        if (!data.error) renderCharacters(data.characters);
         if (!data.error) toast('✅ 人物生成完成');
     } catch (e) {
         showStatus('jjCharsStatus', `<span class="status-err">${escapeHtml(e.message)}</span>`);
@@ -421,7 +421,7 @@ jjGenOutlineBtn.addEventListener('click', async function() {
     try {
         const data = await postJSON('/api/guided/outline/generate', { bookId: jjBookId });
         showStatus('jjOutlineStatus', `<span class="${data.error ? 'status-err' : 'status-ok'}">${escapeHtml(data.status || data.error || '')}</span>`);
-        renderOutlineList(data.outline);
+        if (!data.error) renderOutlineList(data.outline);
         if (!data.error) toast('✅ 大纲生成完成');
     } catch (e) {
         showStatus('jjOutlineStatus', `<span class="status-err">${escapeHtml(e.message)}</span>`);
@@ -636,7 +636,7 @@ document.getElementById('jjConfirmBtn').addEventListener('click', async function
     try {
         const data = await postJSON('/api/guided/confirm', { chapterId: jjChapterId, bookId: jjBookId, force });
         showStatus('jjConfirmStatus', `<span class="${data.error ? 'status-err' : 'status-ok'}">${escapeHtml(data.status || data.error || '')}</span>`);
-        renderChapters(data.chapters || []);
+        if (data.chapters && data.chapters.length) renderChapters(data.chapters);
         if (!data.error) toast('✅ 已确认本章');
     } catch (e) {
         toast('⚠️ 确认失败：' + e.message);

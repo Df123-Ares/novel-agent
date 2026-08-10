@@ -1,8 +1,8 @@
 # Novel-Agent
 
-本地大模型驱动的长篇小说创作辅助引擎（API 优先）。
+本地大模型优先的长篇小说创作 agent —— 写作、润色、一致性检查全部由本地 Ollama 完成，不依赖任何云端 API。
 
-当前进度：**阶段 1.3** —— 按规划字数写作 + 完本标记 + txt 导出（前端仍延后）。
+当前进度：**阶段 1.3** —— 按规划字数写作 + 完本标记 + txt 导出（Flask Web 界面已完成，替代 Gradio 前端）。
 
 ## 环境要求
 
@@ -17,6 +17,20 @@ pip install -e ".[dev]"
 Copy-Item .env.example .env
 python scripts/migrate.py
 ```
+
+## 启动 Web 界面
+
+```powershell
+start.bat
+```
+
+或手动运行：
+
+```powershell
+python webui.py
+```
+
+浏览器打开 `http://127.0.0.1:7860`（三个页签：基础版一键成书 / 进阶版引导流程 / 高级版上传大纲）。
 
 ## 验收
 
@@ -55,4 +69,4 @@ python server.py
 
 - 默认 `OLLAMA_THINK=false`
 - 单章目标字数来自章节规划（短篇总字数 ÷ 章数）
-- 前端、SSE、向量库、epub/pdf 仍延后
+- SSE、向量库、epub/pdf 仍延后
