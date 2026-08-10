@@ -11,3 +11,5 @@ venv/
 *.pid
 ui_*.log
 *_run.log*
+vlc-help.txt
+scripts/camera_test/
