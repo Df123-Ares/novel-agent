@@ -16,7 +16,11 @@ from novel_agent.domain.story.llm_outputs import (
     WriterLLMOutput,
 )
 from novel_agent.domain.text_quality import assess_draft_quality
-from novel_agent.infrastructure.persistence.db import create_all_tables, get_engine, reset_engine
+from novel_agent.infrastructure.persistence.db import (
+    create_all_tables,
+    get_engine,
+    reset_engine,
+)
 from novel_agent.infrastructure.persistence.models import (
     ChapterRow,
     ChapterVersionRow,

@@ -9,7 +9,11 @@ import pytest
 from novel_agent.application.workflows import book_flow
 from novel_agent.domain.book.schemas import CreateBookRequest
 from novel_agent.domain.errors import PreconditionError, new_id
-from novel_agent.infrastructure.persistence.db import create_all_tables, get_engine, reset_engine
+from novel_agent.infrastructure.persistence.db import (
+    create_all_tables,
+    get_engine,
+    reset_engine,
+)
 from novel_agent.infrastructure.persistence.models import (
     ChapterRow,
     ChapterVersionRow,

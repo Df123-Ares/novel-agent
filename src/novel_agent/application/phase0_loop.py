@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from novel_agent.bootstrap import ensure_data_dirs
-from novel_agent.domain.consistency import CandidateChange, CandidateChangeSet, ChangeStatus
+from novel_agent.domain.consistency import (
+    CandidateChange,
+    CandidateChangeSet,
+    ChangeStatus,
+)
 from novel_agent.domain.story import ChapterDraft
 from novel_agent.domain.story.llm_outputs import ExtractorLLMOutput, WriterLLMOutput
 from novel_agent.domain.tasks import TaskStatus
@@ -119,7 +123,7 @@ def run_phase0_loop(
         run.change_set = change_set
         run.phase = GenerationPhase.DONE
         run.transition(TaskStatus.SUCCEEDED)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         run.error = str(exc)
         run.mark_rejected_changes(str(exc))
         if run.status == TaskStatus.RUNNING:

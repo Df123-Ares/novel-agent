@@ -4,10 +4,24 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from novel_agent.infrastructure.persistence.models.base import Base, IdMixin, TimestampMixin, utcnow
+from novel_agent.infrastructure.persistence.models.base import (
+    Base,
+    IdMixin,
+    TimestampMixin,
+    utcnow,
+)
 
 
 class BookRow(Base, IdMixin, TimestampMixin):

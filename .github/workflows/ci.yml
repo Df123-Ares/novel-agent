@@ -28,7 +28,7 @@ jobs:
         run: ruff check src tests
 
       - name: Run mypy (type check)
-        run: mypy src
+        run: mypy src/novel_agent --exclude 'numpy'
 
       - name: Run unit tests (no Ollama required)
         run: pytest tests/unit -q

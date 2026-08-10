@@ -177,7 +177,7 @@ def _dedupe_trailing_block_vs_earlier(text: str, min_span: int = 18) -> tuple[st
                 rebuilt += "\n"
             return rebuilt, True, "trailing_duplicate_block"
         # fuzzy: compare tail string to sliding windows of earlier paragraphs
-        for i in range(0, len(head) - tail_n + 1):
+        for i in range(len(head) - tail_n + 1):
             window = head[i : i + tail_n]
             win_key = _norm_key("".join(window))
             if abs(len(win_key) - len(tail_key)) > max(20, int(0.2 * len(tail_key))):

@@ -18,7 +18,7 @@ _session_locals: dict[str, sessionmaker[Session]] = {}
 
 def _configure_sqlite(engine: Engine) -> None:
     @event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_conn, _connection_record):  # noqa: ANN001
+    def _set_sqlite_pragma(dbapi_conn, _connection_record):
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA journal_mode=WAL")

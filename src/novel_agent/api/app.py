@@ -9,7 +9,11 @@ from novel_agent.api.errors import register_exception_handlers
 from novel_agent.api.routers import router as v1_router
 from novel_agent.bootstrap import ensure_data_dirs
 from novel_agent.infrastructure.llm.gateway import LLMGateway
-from novel_agent.infrastructure.persistence.db import create_all_tables, get_engine, get_session_factory
+from novel_agent.infrastructure.persistence.db import (
+    create_all_tables,
+    get_engine,
+    get_session_factory,
+)
 from novel_agent.settings import Settings, get_settings
 
 

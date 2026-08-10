@@ -9,7 +9,11 @@ from typing import Any
 from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 
-from novel_agent.domain.book.llm_outputs import CharactersLLMOutput, OutlineLLMOutput, OutlineNodeLLM
+from novel_agent.domain.book.llm_outputs import (
+    CharactersLLMOutput,
+    OutlineLLMOutput,
+    OutlineNodeLLM,
+)
 from novel_agent.domain.book.schemas import (
     BookOut,
     CandidateChangeOut,
@@ -29,7 +33,12 @@ from novel_agent.domain.book.schemas import (
     WriteLoopItem,
     WriteLoopResult,
 )
-from novel_agent.domain.errors import ConflictError, NotFoundError, PreconditionError, new_id
+from novel_agent.domain.errors import (
+    ConflictError,
+    NotFoundError,
+    PreconditionError,
+    new_id,
+)
 from novel_agent.domain.story.llm_outputs import (
     ChapterCheckLLMOutput,
     ExtractorLLMOutput,
@@ -52,7 +61,6 @@ from novel_agent.infrastructure.persistence.models import (
 )
 from novel_agent.infrastructure.prompts import PromptRegistry
 from novel_agent.settings import Settings, get_settings
-
 
 _ARC_HEADER_RE = re.compile(r"^第\s*[0-9一二三四五六七八九十百]+\s*[卷部篇]")
 _CHAPTER_HEADER_RE = re.compile(r"^第\s*[0-9一二三四五六七八九十百]+\s*[章回节]")
@@ -301,7 +309,7 @@ def generate_outline(
         book.version += 1
         task.status = TaskStatus.SUCCEEDED.value
         task.result_json = json.dumps({"prompt": spec.prompt_id, "version": spec.version})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         task.status = TaskStatus.FAILED.value
         task.error = str(exc)
         raise
@@ -430,7 +438,7 @@ def generate_characters(
         book.version += 1
         task.status = TaskStatus.SUCCEEDED.value
         task.result_json = json.dumps({"count": len(out.characters)})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         task.status = TaskStatus.FAILED.value
         task.error = str(exc)
         raise
@@ -1037,7 +1045,7 @@ def polish_chapter_draft(
             if vi.suggestion:
                 issue_lines.append(f"  → 修复方式：{vi.suggestion}")
             else:
-                issue_lines.append(f"  → 修复方式：请根据硬设定和上下文自行修正")
+                issue_lines.append("  → 修复方式：请根据硬设定和上下文自行修正")
         issues_text = "\n\n".join(issue_lines)
     else:
         issues_text = ""
@@ -1396,7 +1404,7 @@ def generate_chapter(
         ch_path.write_text(version.content, encoding="utf-8")
 
         return result
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         task.status = TaskStatus.FAILED.value
         task.error = str(exc)
         raise

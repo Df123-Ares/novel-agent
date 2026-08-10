@@ -10,7 +10,11 @@ from novel_agent.application.workflows import book_flow
 from novel_agent.domain.book.schemas import CreateBookRequest
 from novel_agent.infrastructure.llm.capabilities import probe_model
 from novel_agent.infrastructure.llm.ollama_adapter import OllamaAdapter
-from novel_agent.infrastructure.persistence.db import create_all_tables, get_engine, reset_engine
+from novel_agent.infrastructure.persistence.db import (
+    create_all_tables,
+    get_engine,
+    reset_engine,
+)
 from novel_agent.infrastructure.persistence.unit_of_work import UnitOfWork
 from novel_agent.settings import get_settings
 

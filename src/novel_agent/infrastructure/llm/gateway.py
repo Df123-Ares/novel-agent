@@ -34,7 +34,7 @@ def _call_with_transport_retry(
     for attempt in range(_TRANSPORT_RETRIES + 1):
         try:
             return adapter.chat(messages, **kwargs)
-        except Exception as exc:  # noqa: BLE001 - transport/HTTP failure
+        except Exception as exc:
             if not _is_transient_error(exc):
                 raise
             if attempt >= _TRANSPORT_RETRIES:

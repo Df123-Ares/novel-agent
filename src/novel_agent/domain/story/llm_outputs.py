@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from novel_agent.domain.consistency import CandidateChange, ChangeKind
+from novel_agent.domain.consistency import ChangeKind
 
 
 class WriterLLMOutput(BaseModel):

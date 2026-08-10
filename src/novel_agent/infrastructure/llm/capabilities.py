@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -21,7 +21,7 @@ class ProbeReport(BaseModel):
     model: str
     base_url: str
     think: bool
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     checks: list[ProbeCheck] = Field(default_factory=list)
     ok: bool = False
 

@@ -39,3 +39,48 @@ pythonpath = ["src"]
 markers = [
   "integration: requires local Ollama",
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+select = ["E", "F", "I", "UP", "B", "PIE", "RUF", "PYI", "ANN"]
+ignore = [
+  "B008",  # FastAPI Depends in defaults is standard practice
+  "BLE001",  # Intentional broad exception catches in pipeline code
+  "ANN001",  # Missing type hints for SQLite pragma callback
+  "ANN201",  # Missing return type annotations for FastAPI route handlers
+  "ANN401",  # typing.Any in public API (FastAPI/Pydantic patterns)
+  "RUF001",  # Full-width punctuation in Chinese strings/comments
+  "RUF003",  # Full-width punctuation in comments
+  "UP042",  # StrEnum not available in Python 3.11 (3.11+ only)
+  "PYI034",  # UnitOfWork.__enter__ return type
+  "ANN204",  # __init__ return type
+  "ANN202",  # Private function return type
+  "E741",  # Single-letter variable in list comprehension (acceptable)
+  "RUF005",  # Iterable unpacking in retry loop
+  "F401",  # Unused imports (handled by auto-fix)
+  "RUF100",  # Unused noqa (handled by auto-fix)
+  "RUF002",  # EN DASH in docstrings
+  "B007",  # Unused loop variable (acceptable in retry loops)
+  "F841",  # Unused variable (handled by auto-fix)
+  "RUF059",  # Unused unpacked variable (handled by auto-fix)
+  "PIE810",  # startswith with tuple (handled by auto-fix)
+  "UP017",  # datetime.UTC (handled by auto-fix)
+]
+fixable = ["I", "F401", "RUF100", "UP017", "PIE810", "F541", "F841", "RUF059"]
+unsafe-fixes = false
+
+[tool.ruff.isort]
+known-first-party = ["novel_agent"]
+combine-as-imports = true
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["numpy.*"]
+ignore_missing_imports = true

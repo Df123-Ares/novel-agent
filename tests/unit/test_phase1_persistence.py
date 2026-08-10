@@ -9,8 +9,12 @@ from sqlalchemy import select
 
 from novel_agent.application.workflows import book_flow
 from novel_agent.domain.book.schemas import CreateBookRequest, UpdateOutlineNodeRequest
-from novel_agent.domain.errors import ConflictError, PreconditionError
-from novel_agent.infrastructure.persistence.db import create_all_tables, get_engine, reset_engine
+from novel_agent.domain.errors import ConflictError, PreconditionError, new_id
+from novel_agent.infrastructure.persistence.db import (
+    create_all_tables,
+    get_engine,
+    reset_engine,
+)
 from novel_agent.infrastructure.persistence.fts import search_fts
 from novel_agent.infrastructure.persistence.models import (
     CandidateChangeRow,
@@ -21,7 +25,6 @@ from novel_agent.infrastructure.persistence.models import (
     OutlineNodeRow,
 )
 from novel_agent.infrastructure.persistence.unit_of_work import UnitOfWork
-from novel_agent.domain.errors import new_id
 
 
 @pytest.fixture()
