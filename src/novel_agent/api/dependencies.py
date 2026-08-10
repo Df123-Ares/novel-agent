@@ -32,5 +32,6 @@ def get_db(request: Request) -> Iterator[Session]:
 def get_gateway(request: Request) -> LLMGateway:
     gw = getattr(request.app.state, "gateway", None)
     if gw is not None:
+        assert isinstance(gw, LLMGateway)
         return gw
     return LLMGateway(settings=get_settings())

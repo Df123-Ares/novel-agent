@@ -172,7 +172,7 @@ def _delete_book_outline(session: Session, book_id: str) -> None:
         referenced = {n.parent_id for n in present if n.parent_id}
         deletable = [n for n in present if n.id not in referenced]
         if not deletable:
-            deletable = present  # defensive: break cycles, delete in any order
+            deletable = list(present)  # defensive: break cycles, delete in any order
         for n in deletable:
             session.delete(n)
         session.flush()
@@ -1832,7 +1832,7 @@ def import_custom_outline(
         session.add(vision)
         nodes.append(vision)
 
-        current_arc: OutlineNodeRow | None = None
+        current_arc = None
         arc_idx = 0
         for line in lines:
             # Arc headers: "第N卷/部/篇" or short lines containing 卷/部/篇.

@@ -5,7 +5,7 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![CI](https://github.com/Novel-Agent/novel-agent/workflows/CI/badge.svg)
 
-**本地大模型驱动的长篇小说创作辅助引擎（API 优先 + 多前端）**
+**本地大模型驱动的长篇小说创作辅助引擎（本地大模型优先 + 多前端）**
 
 > 当前阶段：**Phase 1.3** —— 按规划字数写作 + 完本标记 + txt 导出 + 一致性校验 + 事实抽取
 

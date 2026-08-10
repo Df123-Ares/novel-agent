@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import ollama
 from pydantic import BaseModel, ValidationError
@@ -28,7 +28,7 @@ def _is_transient_error(exc: Exception) -> bool:
 
 
 def _call_with_transport_retry(
-    adapter: OllamaAdapter, messages: list[dict[str, str]], **kwargs: object
+    adapter: OllamaAdapter, messages: list[dict[str, str]], **kwargs: Any
 ) -> ChatResult:
     """Invoke adapter.chat, retrying transient transport/HTTP failures with backoff."""
     for attempt in range(_TRANSPORT_RETRIES + 1):
