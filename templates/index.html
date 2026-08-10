@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>☀️ Novel-Agent · 小说创作助手</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>☀️</text></svg>" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+
+    <div class="glow glow--o"></div>
+    <div class="glow glow--p"></div>
+
+    <div class="app">
+        <!-- 导航栏 -->
+        <nav class="navbar">
+            <div class="logo"><span>☀️</span> Novel-Agent</div>
+            <div class="tabs" id="tabContainer">
+                <button class="tab-btn active" data-tab="jichu">基础版</button>
+                <button class="tab-btn" data-tab="jinjie">进阶版</button>
+                <button class="tab-btn" data-tab="gaoji">高级版</button>
+            </div>
+            <div class="nav-right">
+                <span class="badge" id="ollamaBadge">
+                    <span class="status-dot" id="ollamaDot"></span>
+                    <span id="ollamaStatus">检测中...</span>
+                </span>
+                <div class="model-picker" id="modelPicker" style="display:none;">
+                    <button class="model-trigger" id="modelTrigger" type="button" title="选择模型">
+                        <span id="modelTriggerText">模型</span>
+                        <span class="caret">▾</span>
+                    </button>
+                    <div class="model-dropdown" id="modelDropdown"></div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- 内容 -->
+        <div class="content">
+            <!-- ========== 基础版：一键成书 ========== -->
+            <div class="page active" id="page-jichu">
+                <div class="lingxi-content">
+                    <div class="hero-title">
+                        ☀️ 输入书名，一键成书
+                        <small>系统自动完成人物设计、大纲构思、全部章节写作与导出</small>
+                    </div>
+                    <div class="input-group">
+                        <input type="text" id="jbTitle" placeholder="📖 请为你的故事取一个书名..." />
+                    </div>
+                    <div class="pill-group" id="jbLengthGroup">
+                        <span class="pill" data-length="short">短篇 (~3万字)</span>
+                        <span class="pill active" data-length="medium">中篇 (~12万字)</span>
+                        <span class="pill" data-length="long">长篇 (~30万字)</span>
+                    </div>
+                    <button class="btn-primary" id="jbGenerateBtn">✨ 开始创作</button>
+
+                    <div id="jbProgress" style="display:none;">
+                        <div class="warn log-box hidden" id="jbLog"></div>
+                        <div style="text-align:center;font-size:14px;color:#7A5F4E;padding:6px 0;" id="jbProgressText">生成中...</div>
+                    </div>
+
+                    <div id="jbResult" style="display:none;">
+                        <div class="log-box" id="jbResultLog"></div>
+                        <div class="post-generate-actions" id="jbActions" style="display:none;">
+                            <a class="btn-save-work" id="jbDownload" style="text-decoration:none;display:inline-block;padding:10px 24px;border-radius:40px;background:rgba(123,163,123,0.18);border:1px solid rgba(123,163,123,0.35);color:#4F7A4F;font-size:14px;cursor:pointer;" href="#">📥 下载小说</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ========== 进阶版：逐步引导 ========== -->
+            <div class="page" id="page-jinjie">
+                <div class="zhiwang-layout">
+                    <div class="zw-left">
+                        <!-- 步骤一：创作卡片 -->
+                        <div class="card-section">
+                            <h4>📖 创作卡片</h4>
+                            <input type="text" placeholder="📖 请为你的小说起个名字..." id="jjTitle" />
+                            <textarea placeholder="📝 一句话梗概（选填，左侧示例：港口档案馆夜班管理员发现与失踪妹妹相关的灯塔日志...）" id="jjPremise"></textarea>
+                            <span class="field-label">🏷️ 类型</span>
+                            <select id="jjGenre">
+                                <option value="悬疑" selected>悬疑</option>
+                                <option value="都市">都市</option>
+                                <option value="玄幻">玄幻</option>
+                                <option value="言情">言情</option>
+                                <option value="科幻">科幻</option>
+                                <option value="历史">历史</option>
+                                <option value="武侠">武侠</option>
+                                <option value="恐怖">恐怖</option>
+                                <option value="其他">其他</option>
+                            </select>
+                            <span class="field-label">🎨 风格</span>
+                            <select id="jjStyle">
+                                <option value="网文通俗" selected>网文通俗</option>
+                                <option value="轻松">轻松</option>
+                                <option value="严肃">严肃</option>
+                                <option value="爆款网文">爆款网文</option>
+                                <option value="文学性">文学性</option>
+                            </select>
+                            <span class="field-label">🌤 基调</span>
+                            <select id="jjTone">
+                                <option value="暗黑" selected>暗黑</option>
+                                <option value="热血">热血</option>
+                                <option value="治愈">治愈</option>
+                                <option value="悲剧">悲剧</option>
+                                <option value="轻松">轻松</option>
+                                <option value="悬疑">悬疑</option>
+                            </select>
+                            <span class="field-label">📏 篇幅</span>
+                            <div class="pill-group" style="justify-content:flex-start;" id="jjLengthGroup">
+                                <span class="pill" data-length="short">短篇</span>
+                                <span class="pill active" data-length="medium">中篇</span>
+                                <span class="pill" data-length="long">长篇</span>
+                            </div>
+                            <span class="field-label">👁️ 视角</span>
+                            <div class="pill-group" style="justify-content:flex-start;" id="jjPovGroup">
+                                <span class="pill" data-pov="第一人称">第一人称</span>
+                                <span class="pill active" data-pov="第三人称">第三人称</span>
+                                <span class="pill" data-pov="多视角">多视角</span>
+                            </div>
+                            <button class="btn-primary" style="font-size:16px;padding:12px;width:100%;margin-top:14px;" id="jjCreateBtn">🆕 创建项目</button>
+                            <div class="sec-body" id="jjBookInfo" style="margin-top:10px; display:none;"></div>
+                        </div>
+                    </div>
+
+                    <div class="zw-right" style="padding:0;">
+                        <div class="workbench">
+                            <!-- 人物设计 -->
+                            <div class="step-section">
+                                <h4>👥 步骤二 · 人物设计</h4>
+                                <div class="sec-actions">
+                                    <button class="btn-step hot" id="jjGenCharsBtn">🎭 生成人物</button>
+                                    <button class="btn-step" id="jjListCharsBtn">🔄 刷新列表</button>
+                                    <button class="btn-step" id="jjLockCharsBtn">🔒 锁定人物</button>
+                                </div>
+                                <div class="sec-body" id="jjCharsStatus" style="display:none;"></div>
+                                <div class="person-list" id="jjCharsList" style="margin-top:8px;"></div>
+                            </div>
+
+                            <!-- 大纲 -->
+                            <div class="step-section">
+                                <h4>📋 步骤三 · 大纲</h4>
+                                <div class="sec-actions">
+                                    <button class="btn-step hot" id="jjGenOutlineBtn">🤖 生成大纲</button>
+                                    <button class="btn-step" id="jjListOutlineBtn">🔄 刷新列表</button>
+                                    <button class="btn-step" id="jjLockOutlineBtn">🔒 锁定大纲</button>
+                                </div>
+                                <div class="sec-body" id="jjOutlineStatus" style="display:none;"></div>
+                                <div class="ol-list" id="jjOutlineList" style="margin-top:8px;"></div>
+                            </div>
+
+                            <!-- 章节规划 -->
+                            <div class="step-section">
+                                <h4>📊 步骤四 · 章节规划</h4>
+                                <div class="sec-actions">
+                                    <button class="btn-step hot" id="jjPlanBtn">🗺️ 生成规划</button>
+                                </div>
+                                <div class="sec-body" id="jjPlanStatus" style="display:none;"></div>
+                                <div class="ch-list" id="jjPlanList" style="margin-top:8px;"></div>
+                            </div>
+
+                            <!-- 逐章写作 -->
+                            <div class="step-section">
+                                <h4>✍️ 步骤五 · 逐章写作</h4>
+                                <div class="sec-actions">
+                                    <button class="btn-step" id="jjLocateBtn">📍 定位到下一章</button>
+                                    <button class="btn-step" id="jjListChaptersBtn">🔄 刷新章节列表</button>
+                                </div>
+                                <div class="ch-list" id="jjChaptersList" style="margin:4px 0 8px;"></div>
+                                <div class="info-panel hidden" id="jjTargetInfo"></div>
+                                <div class="target-title" id="jjChTitle" style="display:none;"></div>
+                                <div class="sec-body" id="jjWriteStatus" style="display:none;"></div>
+                                <span class="mini-title">📝 章节正文</span>
+                                <textarea class="write-area" id="jjContent" placeholder="点击「📍 定位到下一章」加载待写章节草稿，或在此手动编辑..."></textarea>
+                                <span class="mini-title">🧩 候选事实</span>
+                                <div class="fact-list" id="jjChanges"></div>
+                                <span class="mini-title">🩺 一致性检查</span>
+                                <div id="jjValidation"></div>
+                                <div class="sec-actions" style="margin-top:10px;">
+                                    <button class="btn-step hot" id="jjWriteBtn">🚀 生成/重写本章</button>
+                                    <button class="btn-step" id="jjPolishBtn">🔧 修复 + 润色</button>
+                                    <button class="btn-step" id="jjConfirmBtn">✅ 确认本章</button>
+                                    <label class="force-cb" title="跳过质量检查强制确认">
+                                        <input type="checkbox" id="jjForce" /> 强制确认
+                                    </label>
+                                </div>
+                                <div class="sec-body" id="jjConfirmStatus" style="display:none;"></div>
+                                <span class="mini-title">📖 预览章节</span>
+                                <div class="preview-row">
+                                    <select id="jjPreviewSel"><option value="">尚未加载</option></select>
+                                    <button class="btn-step" id="jjPreviewBtn">👁 查看</button>
+                                </div>
+                                <div class="target-title" id="jjPreviewTitle" style="display:none;margin-top:8px;"></div>
+                                <textarea class="mini-area" id="jjPreviewContent" readonly placeholder="选择章节后点击「👁 查看」..."></textarea>
+                            </div>
+
+                            <!-- 完本 & 导出 -->
+                            <div class="step-section">
+                                <h4>🏁 步骤六 · 完本 & 导出</h4>
+                                <div class="sec-actions">
+                                    <button class="btn-step" id="jjCompleteBtn">🏁 完本</button>
+                                    <span class="status-muted" style="align-self:center;font-size:12px;">导出范围：</span>
+                                    <div class="pill-group" style="justify-content:flex-start;" id="jjScopeGroup">
+                                        <span class="pill active" data-scope="confirmed">仅已确认章节</span>
+                                        <span class="pill" data-scope="all">全部章节</span>
+                                    </div>
+                                    <button class="btn-step hot" id="jjExportBtn">📤 导出 TXT</button>
+                                </div>
+                                <div class="sec-body" id="jjCompleteStatus" style="display:none;"></div>
+                                <a class="dl-btn hidden" id="jjExportLink" href="#">📥 下载导出文件</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ========== 高级版：上传大纲 ========== -->
+            <div class="page" id="page-gaoji">
+                <div class="gongzhu-content">
+                    <div class="upload-zone" id="uploadZone">
+                        <div class="icon">📤</div>
+                        <p>拖拽或点击上传大纲文件（.txt / .md）</p>
+                        <p style="font-size:12px;color:#A68B7A;">系统自动识别章节结构，无需手写格式</p>
+                        <input type="file" id="fileInput" style="display:none;" accept=".txt,.md" />
+                    </div>
+
+                    <div id="gzProgress" style="display:none;">
+                        <div class="progress-steps" id="gzSteps">
+                            <div class="step-item" data-step="1"><div class="circle">①</div><span>解析文件</span></div>
+                            <div class="step-item" data-step="2"><div class="circle">②</div><span>导入大纲</span></div>
+                            <div class="step-item" data-step="3"><div class="circle">③</div><span>创建项目</span></div>
+                        </div>
+                    </div>
+
+                    <div id="gzParsed" style="display:none;"></div>
+
+                    <div id="gzGenerateRow" style="display:none;">
+                        <button class="btn-primary" style="font-size:16px;padding:12px 40px;" id="gzGenerateBtn">📖 生成小说</button>
+                    </div>
+
+                    <div id="gzResult" style="display:none;">
+                        <div class="log-box" id="gzLog"></div>
+                        <a class="dl-btn" id="gzDownload" style="display:none;" href="#">📥 下载小说</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 加载动画与弹窗由 script.js 注入 -->
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

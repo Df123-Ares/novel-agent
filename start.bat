@@ -8,5 +8,5 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":7860" ^| findstr "LISTENING
 :: Start UI
 echo Starting Novel-Agent on http://127.0.0.1:7860 ...
 start "" http://127.0.0.1:7860
-python app_ui.py
+python webui.py
 pause
