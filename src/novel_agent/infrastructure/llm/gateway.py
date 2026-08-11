@@ -188,8 +188,11 @@ class LLMGateway:
                         return repaired, result
                     last_error = exc
                     detail["error"] = _classify_failure(exc)
+                    # Retry with ONLY the repair instruction: the previous
+                    # assistant output (up to thousands of tokens) is dropped so
+                    # the repair prompt stays inside the context window instead
+                    # of pushing the instruction out past the truncation point.
                     working_messages = list(messages) + [
-                        {"role": "assistant", "content": result.content or ""},
                         {
                             "role": "user",
                             "content": _repair_instruction(exc),

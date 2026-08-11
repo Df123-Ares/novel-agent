@@ -56,6 +56,7 @@ class OllamaAdapter:
             "num_predict": num_predict
             if num_predict is not None
             else self.settings.default_num_predict,
+            "num_ctx": self.settings.context_limit,
         }
         if temperature is not None:
             options["temperature"] = temperature
@@ -91,6 +92,7 @@ class OllamaAdapter:
             "num_predict": num_predict
             if num_predict is not None
             else self.settings.default_num_predict,
+            "num_ctx": self.settings.context_limit,
         }
         stream = self.client.chat(
             model=model or self.model,

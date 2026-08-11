@@ -103,8 +103,7 @@ python scripts/demo_user_flow.py --max-chapters 3
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama HTTP 端点 | 是 |
 | `OLLAMA_MODEL` | `deepseek-r1:8b` | 已 `ollama pull` 的模型名 | 是 |
 | `OLLAMA_THINK` | `false` | 推理模型需关闭以输出纯 JSON（qwen3/qwq 必须关） | 否 |
-| `CONTEXT_LIMIT` | `32768` | 模型上下文窗口（token） | 否 |
-| `OUTPUT_RESERVE_TOKENS` | `2048` | 预留给结构化输出的 token | 否 |
+| `CONTEXT_LIMIT` | `6144` | 传给 Ollama 的 num_ctx；6144 可覆盖实测 prompt+输出总长，避免 4096 默认值下 >4096 token 的 prompt 被静默截断 | 否 |
 | `DEFAULT_NUM_PREDICT` | `2048` | 单次生成默认 token 上限 | 否 |
 | `SCHEMA_REPAIR_RETRIES` | `2` | JSON 修复重试次数 | 否 |
 | `DATABASE_URL` | `sqlite:///data/novel_agent.db` | SQLAlchemy 连接串 | 否 |

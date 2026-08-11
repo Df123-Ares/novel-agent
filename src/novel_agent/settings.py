@@ -22,8 +22,10 @@ class Settings(BaseSettings):
     # deepseek-r1/qwen3 均天然带推理；为结构化 JSON 输出统一关闭（content 保持纯净）
     ollama_think: bool = Field(default=False, alias="OLLAMA_THINK")
 
-    context_limit: int = Field(default=32768, alias="CONTEXT_LIMIT")
-    output_reserve_tokens: int = Field(default=2048, alias="OUTPUT_RESERVE_TOKENS")
+    # num_ctx passed to ollama for every call. 6GB VRAM + 5.2GB model:
+    # 6144 covers observed prompt+output totals (max 5837) at ~1 GPU-layer cost;
+    # 4096 (ollama default) silently truncates prompts > 4096 tokens.
+    context_limit: int = Field(default=6144, alias="CONTEXT_LIMIT")
     default_num_predict: int = Field(default=2048, alias="DEFAULT_NUM_PREDICT")
     schema_repair_retries: int = Field(default=2, alias="SCHEMA_REPAIR_RETRIES")
 
