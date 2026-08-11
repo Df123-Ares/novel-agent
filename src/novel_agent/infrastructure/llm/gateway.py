@@ -9,6 +9,8 @@ import ollama
 from pydantic import BaseModel, ValidationError
 
 from novel_agent.infrastructure.llm.ollama_adapter import ChatResult, OllamaAdapter
+from novel_agent.infrastructure.llm.repair import try_repair_json
+from novel_agent.infrastructure.llm.stats import record_llm_call
 from novel_agent.settings import Settings, get_settings
 
 T = TypeVar("T", bound=BaseModel)
@@ -43,6 +45,21 @@ def _call_with_transport_retry(
     raise RuntimeError("unreachable")
 
 
+def _raw_metrics(result: ChatResult | None) -> tuple[int | None, int | None, float | None]:
+    """Extract prompt/eval token counts and total duration from the raw response."""
+    if result is None:
+        return None, None, None
+    raw = result.raw or {}
+    prompt_eval = raw.get("prompt_eval_count")
+    eval_count = raw.get("eval_count")
+    total_ns = raw.get("total_duration")
+    return (
+        int(prompt_eval) if isinstance(prompt_eval, (int, float)) else None,
+        int(eval_count) if isinstance(eval_count, (int, float)) else None,
+        float(total_ns) / 1e6 if isinstance(total_ns, (int, float)) else None,
+    )
+
+
 class LLMGateway:
     def __init__(
         self,
@@ -59,11 +76,30 @@ class LLMGateway:
         num_predict: int | None = None,
         temperature: float | None = None,
     ) -> ChatResult:
-        return self.adapter.chat(
-            messages,
-            num_predict=num_predict,
-            temperature=temperature,
-        )
+        start = time.perf_counter()
+        success = False
+        result: ChatResult | None = None
+        try:
+            result = self.adapter.chat(
+                messages,
+                num_predict=num_predict,
+                temperature=temperature,
+            )
+            success = True
+            return result
+        finally:
+            prompt_eval, eval_count, total_ms = _raw_metrics(result)
+            record_llm_call(
+                schema="<text>",
+                attempts=1,
+                success=success,
+                duration_ms=(time.perf_counter() - start) * 1000,
+                content_chars=len(result.content) if result is not None else 0,
+                prompt_eval_count=prompt_eval,
+                eval_count=eval_count,
+                total_duration_ms=total_ms,
+                rule_repaired=False,
+            )
 
     def chat_structured(
         self,
@@ -79,35 +115,62 @@ class LLMGateway:
             if repair_retries is None
             else repair_retries
         )
+        start = time.perf_counter()
+        attempts = 0
+        success = False
+        rule_repaired = False
+        last_result: ChatResult | None = None
         last_error: Exception | None = None
         working_messages = list(messages)
 
-        for attempt in range(retries + 1):
-            result = _call_with_transport_retry(
-                self.adapter,
-                working_messages,
-                format=schema,
-                num_predict=num_predict,
-                temperature=temperature,
-            )
-            try:
-                if not result.content.strip():
-                    raise ValueError("empty model content (check OLLAMA_THINK=false for reasoning models)")
-                parsed = schema.model_validate_json(result.content)
-                return parsed, result
-            except (ValidationError, ValueError) as exc:
-                last_error = exc
-                working_messages = list(messages) + [
-                    {"role": "assistant", "content": result.content or ""},
-                    {
-                        "role": "user",
-                        "content": (
-                            "上一次输出未通过 Schema 校验。"
-                            f"错误：{exc}\n"
-                            "请只输出符合 JSON Schema 的合法 JSON，不要解释。"
-                        ),
-                    },
-                ]
+        try:
+            for attempt in range(retries + 1):
+                attempts += 1
+                result = _call_with_transport_retry(
+                    self.adapter,
+                    working_messages,
+                    format=schema,
+                    num_predict=num_predict,
+                    temperature=temperature,
+                )
+                last_result = result
+                try:
+                    if not result.content.strip():
+                        raise ValueError("empty model content (check OLLAMA_THINK=false for reasoning models)")
+                    parsed = schema.model_validate_json(result.content)
+                    success = True
+                    return parsed, result
+                except (ValidationError, ValueError) as exc:
+                    repaired = try_repair_json(result.content, schema)
+                    if repaired is not None:
+                        rule_repaired = True
+                        success = True
+                        return repaired, result
+                    last_error = exc
+                    working_messages = list(messages) + [
+                        {"role": "assistant", "content": result.content or ""},
+                        {
+                            "role": "user",
+                            "content": (
+                                "上一次输出未通过 Schema 校验。"
+                                f"错误：{exc}\n"
+                                "请只输出符合 JSON Schema 的合法 JSON，不要解释。"
+                            ),
+                        },
+                    ]
 
-        assert last_error is not None
-        raise last_error
+            assert last_error is not None
+            raise last_error
+        finally:
+            prompt_eval, eval_count, total_ms = _raw_metrics(last_result)
+            record_llm_call(
+                schema=schema.__name__,
+                attempts=attempts,
+                success=success,
+                duration_ms=(time.perf_counter() - start) * 1000,
+                content_chars=len(last_result.content) if last_result is not None else 0,
+                prompt_eval_count=prompt_eval,
+                eval_count=eval_count,
+                total_duration_ms=total_ms,
+                rule_repaired=rule_repaired,
+            )

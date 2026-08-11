@@ -47,6 +47,7 @@ from novel_agent.domain.story.llm_outputs import (
 from novel_agent.domain.tasks import TaskStatus
 from novel_agent.domain.text_quality import assess_draft_quality
 from novel_agent.infrastructure.llm.gateway import LLMGateway
+from novel_agent.infrastructure.llm.stats import record_gate
 from novel_agent.infrastructure.persistence.fts import upsert_fts
 from novel_agent.infrastructure.persistence.models import (
     BookRow,
@@ -933,6 +934,17 @@ def _apply_writer_quality_loop(
     context_manifest["quality_ok"] = quality.quality_ok
     context_manifest["quality_reason"] = quality.reason
     context_manifest["final_word_count"] = quality.word_count
+    record_gate(
+        stage="writer_loop",
+        repair_attempts=repair_attempts,
+        quality_ok=quality.quality_ok,
+        expanded=expanded_count > 0,
+        rewritten=rewritten_count > 0,
+        repetition_truncated=quality.repetition_truncated,
+        repetition_severe=quality.repetition_severe,
+        cut_ratio=round(quality.cut_ratio, 4),
+        final_word_count=quality.word_count,
+    )
     return writer_out
 
 
@@ -1439,6 +1451,17 @@ def confirm_chapter(
             max_trim_ratio=settings.writer_max_trim_ratio,
         )
         if not quality.quality_ok:
+            record_gate(
+                stage="confirm_gate",
+                repair_attempts=0,
+                quality_ok=False,
+                expanded=False,
+                rewritten=False,
+                repetition_truncated=quality.repetition_truncated,
+                repetition_severe=quality.repetition_severe,
+                cut_ratio=round(quality.cut_ratio, 4),
+                final_word_count=quality.word_count,
+            )
             raise PreconditionError(
                 "chapter draft failed quality gate (too short or severe repetition)",
                 code="CHAPTER_QUALITY_FAILED",
