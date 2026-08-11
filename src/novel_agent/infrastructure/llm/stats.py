@@ -39,6 +39,7 @@ def record_llm_call(
     eval_count: int | None,
     total_duration_ms: float | None,
     rule_repaired: bool,
+    attempts_detail: list[dict[str, Any]] | None = None,
 ) -> None:
     _append(
         _LLM_CALLS,
@@ -53,6 +54,7 @@ def record_llm_call(
             "prompt_eval_count": prompt_eval_count,
             "eval_count": eval_count,
             "total_duration_ms": round(total_duration_ms, 1) if total_duration_ms is not None else None,
+            "attempts_detail": attempts_detail or [],
         },
     )
 

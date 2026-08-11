@@ -29,6 +29,16 @@ def _is_transient_error(exc: Exception) -> bool:
     return type(exc).__module__.split(".")[0] in _TRANSPORT_MODULES
 
 
+def _classify_failure(error: Exception) -> str:
+    """Classify a validation failure to tailor the repair instruction."""
+    message = str(error)
+    if "EOF" in message or "Unterminated string" in message or "unterminated string" in message:
+        return "truncated"
+    if "Extra data" in message or "Expecting value" in message:
+        return "garbage"
+    return "schema"
+
+
 def _call_with_transport_retry(
     adapter: OllamaAdapter, messages: list[dict[str, str]], **kwargs: Any
 ) -> ChatResult:
@@ -43,6 +53,27 @@ def _call_with_transport_retry(
                 raise
             time.sleep(_TRANSPORT_BACKOFF * (2**attempt))
     raise RuntimeError("unreachable")
+
+
+def _repair_instruction(error: Exception) -> str:
+    """Build a failure-specific repair instruction for the model retry."""
+    kind = _classify_failure(error)
+    if kind == "truncated":
+        return (
+            "你的输出在 JSON 中途被截断：某个字符串没有闭合，输出戛然而止。"
+            "请重新输出一份完整、闭合的 JSON：所有引号和括号必须成对，"
+            "宁可内容略短，也不要中途截断。只输出 JSON，不要解释。"
+        )
+    if kind == "garbage":
+        return (
+            "你的输出混入了非 JSON 内容（如前言、代码块或多份 JSON）。"
+            "请只输出一份合法 JSON，不要任何解释或多余文字。"
+        )
+    return (
+        "上一次输出未通过 Schema 校验。"
+        f"错误：{error}\n"
+        "请只输出符合 JSON Schema 的合法 JSON，不要解释。"
+    )
 
 
 def _raw_metrics(result: ChatResult | None) -> tuple[int | None, int | None, float | None]:
@@ -122,6 +153,7 @@ class LLMGateway:
         last_result: ChatResult | None = None
         last_error: Exception | None = None
         working_messages = list(messages)
+        attempts_detail: list[dict[str, Any]] = []
 
         try:
             for attempt in range(retries + 1):
@@ -134,6 +166,14 @@ class LLMGateway:
                     temperature=temperature,
                 )
                 last_result = result
+                prompt_eval, eval_count, _ = _raw_metrics(result)
+                detail: dict[str, Any] = {
+                    "num_predict": num_predict,
+                    "eval_count": eval_count,
+                    "content_chars": len(result.content),
+                    "cap_hit": eval_count is not None and num_predict is not None and eval_count >= num_predict,
+                }
+                attempts_detail.append(detail)
                 try:
                     if not result.content.strip():
                         raise ValueError("empty model content (check OLLAMA_THINK=false for reasoning models)")
@@ -147,15 +187,12 @@ class LLMGateway:
                         success = True
                         return repaired, result
                     last_error = exc
+                    detail["error"] = _classify_failure(exc)
                     working_messages = list(messages) + [
                         {"role": "assistant", "content": result.content or ""},
                         {
                             "role": "user",
-                            "content": (
-                                "上一次输出未通过 Schema 校验。"
-                                f"错误：{exc}\n"
-                                "请只输出符合 JSON Schema 的合法 JSON，不要解释。"
-                            ),
+                            "content": _repair_instruction(exc),
                         },
                     ]
 
@@ -173,4 +210,5 @@ class LLMGateway:
                 eval_count=eval_count,
                 total_duration_ms=total_ms,
                 rule_repaired=rule_repaired,
+                attempts_detail=attempts_detail,
             )
