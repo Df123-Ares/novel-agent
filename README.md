@@ -1,13 +1,13 @@
 # Novel-Agent
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
+![Version](https://img.shields.io/badge/version-0.2.2-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![CI](https://github.com/Novel-Agent/novel-agent/workflows/CI/badge.svg)
 
-**本地大模型驱动的长篇小说创作辅助引擎（本地大模型优先 + 多前端）**
+**本地大模型驱动的长篇小说创作辅助引擎（本地大模型优先 + RAG + 分层摘要）**
 
-> 当前阶段：**Phase 1.3** —— 按规划字数写作 + 完本标记 + txt 导出 + 一致性校验 + 事实抽取
+> 当前阶段：**Phase 2.2** —— few-shot 风格一致性 + RAG 事实检索 + 分层摘要 + 章节序号修复
 
 ## 目录
 - [快速开始](#快速开始)
@@ -66,13 +66,11 @@ python scripts/demo_user_flow.py --max-chapters 3
 
 | 模式 | 适用场景 | 入口 | 特点 |
 |------|----------|------|------|
-| **基础版** | 想快速得到一本完整小说 | WebUI "基础版" / Gradio "基础版" / CLI | 只需书名，自动完成：人物→大纲→章节规划→全书写作→确认→完本→导出 |
-| **进阶版** | 想精细控制每一步 | WebUI "进阶版" / Gradio "进阶版" | 6 步引导：创作卡片 → 人物设计 → 大纲 → 章节规划 → 逐章写作(含润色/一致性检查) → 完本导出 |
-| **高级版** | 已有大纲/梗概文本 | WebUI "高级版" / Gradio "高级版" | 上传 .txt/.md 大纲 → 自动解析结构 → 接入进阶版流程 |
+| **基础版** | 想快速得到一本完整小说 | WebUI "基础版" / CLI | 只需书名，自动完成：人物→大纲→章节规划→全书写作→确认→完本→导出 |
+| **进阶版** | 想精细控制每一步 | WebUI "进阶版" | 6 步引导：创作卡片 → 人物设计 → 大纲 → 章节规划 → 逐章写作(含润色/一致性检查) → 完本导出 |
+| **高级版** | 已有大纲/梗概文本 | WebUI "高级版" | 上传 .txt/.md 大纲 → 自动解析结构 → 接入进阶版流程 |
 
-> **WebUI** (Flask + 原生 JS/CSS) 与 **Gradio UI** 功能对等，风格不同：
-> - WebUI：暖阳奶油风，轻量，单文件部署
-> - Gradio：Notion-AI 风，组件丰富，适合二次开发
+> **WebUI** (Flask + 原生 JS/CSS)：暖阳奶油风，轻量，单文件部署，端口 7860
 
 ---
 
@@ -107,18 +105,20 @@ python scripts/demo_user_flow.py --max-chapters 3
 | `WORDS_SHORT` | `30000` | 短篇目标总字数 | 否 |
 | `WORDS_MEDIUM` | `120000` | 中篇目标总字数 | 否 |
 | `WORDS_LONG` | `300000` | 长篇目标总字数 | 否 |
-| `PREV_CHAPTER_TAIL_CHARS` | `800` | 上文回溯字符数（压缩以腾出输出上下文） | 否 |
-| `MAX_FACTS_IN_CONTEXT` | `25` | 上下文注入的最大事实条数（压缩以腾出输出上下文） | 否 |
-| `MAX_CHAPTER_WORDS` | `2000` | 单章目标字数上限，大纲目标超出时自动拆章 | 否 |
+| `PREV_CHAPTER_TAIL_CHARS` | `500` | 上文回溯字符数（压缩以腾出输出上下文） | 否 |
+| `MAX_FACTS_IN_CONTEXT` | `30` | 上下文注入的最大事实条数（RAG 已启用，取 30 条兜底） | 否 |
+| `FEW_SHOT_SAMPLE_CHARS` | `600` | few-shot 风格示例字符数（从上一章开头抽取，0=关闭） | 否 |
+| `MAX_CHAPTER_WORDS` | `2500` | 单章目标字数上限，大纲目标超出时自动拆章 | 否 |
 | `REPEAT_PENALTY` | `1.15` | 重复惩罚（Ollama 默认 1.1；1.15-1.25 抑制退化循环，过高可能导致词汇贫乏） | 否 |
 | `RUN_CONSISTENCY_CHECK` | `false` | 章节生成时是否运行 LLM 一致性校验（默认关以提速；润色时始终执行） | 否 |
-| `WRITER_NUM_PREDICT_FLOOR` | `4096` | 写作最小 token 预算 | 否 |
-| `WRITER_NUM_PREDICT_CEIL` | `12288` | 写作最大 token 预算（实际由上下文余量动态裁剪） | 否 |
-| `WRITER_MIN_WORDS_RATIO` | `0.5` | 实际字数/目标字数 < 此值判定不足 | 否 |
+| `WRITER_NUM_PREDICT_FLOOR` | `2500` | 写作最小 token 预算（由代码根据上下文余量动态计算） | 否 |
+| `WRITER_MIN_WORDS_RATIO` | `0.9` | 实际字数/目标字数 < 此值判定不足（0.9 = 下限2250字） | 否 |
 | `WRITER_REPAIR_REPETITION` | `true` | 是否启用重复检测+重写 | 否 |
-| `WRITER_MAX_REPAIR` | `1` | 单章最大扩写/重写轮数 | 否 |
+| `WRITER_MAX_REPAIR` | `2` | 单章最大扩写/重写轮数 | 否 |
 | `WRITER_MAX_TRIM_RATIO` | `0.25` | 去重截断比例 ≥ 此值触发重写 | 否 |
 | `WRITER_ENFORCE_QUALITY_ON_CONFIRM` | `true` | 质量不达标时自动确认是否跳过 | 否 |
+| `ARC_SUMMARIES_IN_CONTEXT` | `5` | 注入的卷摘要数量（每10章压缩） | 否 |
+| `MEGA_ARC_SUMMARIES_IN_CONTEXT` | `3` | 注入的大卷摘要数量（每50章压缩） | 否 |
 
 ---
 
@@ -189,13 +189,43 @@ sequenceDiagram
 | **模型接入** | `gateway.py` 直连 Ollama（JSON mode/raw 精确控制），仅 113 行 | langchain 的 Ollama 抽象对本地小模型是隔层，关键参数难透传 |
 | **依赖** | 17 个显式依赖，无传递膨胀，pydantic 版本可控 | langchain 依赖树庞大，与 FastAPI/SQLAlchemy 栈存在 pydantic 版本冲突风险 |
 
-**触发引入的条件**（当前均不满足）：
-1. 需要自主 agent 式写作（模型自行决策调用工具/检索/改写）
-2. 需要多模型统一抽象（OpenAI/Claude/本地混用）
-3. 需要 RAG 检索增强
+**触发引入的条件**（部分已满足）：
+1. 需要自主 agent 式写作（模型自行决策调用工具/检索/改写）— 未满足
+2. 需要多模型统一抽象（OpenAI/Claude/本地混用）— 未满足
+3. ~~需要 RAG 检索增强~~ — **已自研实现**（FTS5 + bm25，无需引入框架）
 4. 团队深度熟悉该生态，人效优先
 
 **原则**：未来若需引入，先以最小模块（如 `phase0_loop.py`，137 行）做 POC 对照，验证收益后再决定是否重写。
+
+---
+
+## 长程一致性机制
+
+长篇小说（100+章）面临的核心挑战：模型上下文有限，无法装入全部历史。本项目通过三层机制解决：
+
+### 1. RAG 事实检索（FTS5 + bm25）
+- **替代**"取最近 N 条事实"的朴素逻辑
+- 基于章节标题/目标检索**最相关**的已确认事实
+- SQLite FTS5 全文索引 + OR 查询 + bm25 相关性排序
+- 中文逐字分词 + 90 词停用词表过滤高频虚字
+- 兜底：RAG 结果不足时补充最近事实填满槽位
+
+### 2. 分层摘要（压缩长程记忆）
+- **卷摘要（arc summary）**：每 10 章自动压缩为 1 段摘要
+- **大卷摘要（mega arc summary）**：每 50 章再压缩为 1 段
+- 注入时从最远到最近排列，覆盖最多 150 章背景
+- 生成时机：章节确认后自动触发（best-effort，不阻塞进度）
+
+### 3. Few-shot 风格示例
+- 从**已确认章节**的开头抽取 600 字作为风格锚点
+- LLM 模仿前文的文风、语气、节奏、描写密度
+- 第 1 章无前文时自动跳过，第 2 章起自动生效
+- `FEW_SHOT_SAMPLE_CHARS=0` 可关闭
+
+```
+章节上下文构建顺序：
+  硬设定(人物/世界观) → few-shot风格示例 → 分层摘要(远→近) → RAG事实 → 前章回溯 → 本章目标
+```
 
 ---
 
@@ -203,7 +233,7 @@ sequenceDiagram
 
 | 机制 | 触发条件 | 行为 |
 |------|----------|------|
-| **字数达标** | `actual_words / target_words < WRITER_MIN_WORDS_RATIO (0.55)` | `quality_ok=false`，自动扩写（最多 `WRITER_MAX_REPAIR=2` 轮） |
+| **字数达标** | `actual_words / target_words < WRITER_MIN_WORDS_RATIO (0.9)` | `quality_ok=false`，自动扩写（最多 `WRITER_MAX_REPAIR=2` 轮） |
 | **重复检测** | 连续 n-gram 重复/循环复读 | 截断重复段，若截断比例 ≥ `WRITER_MAX_TRIM_RATIO (0.25)` 触发重写 |
 | **一致性校验** | 章节生成后自动运行 | 抽取候选事实 → 对比已确认事实库 → 产出 `error/warning/info` 级问题 |
 | **润色修复** | 手动点击"修复+润色" | 基于校验问题定向重写，输出修复前后对比 |
@@ -249,26 +279,29 @@ novel-agent/
 ├── webui.py               # Flask WebUI 入口 (端口 7860，三模式界面)
 ├── start.bat              # Windows 一键启动脚本
 ├── pyproject.toml         # 包配置 (依赖、pytest、版本)
-├── .env.example           # 配置模板 (21 项)
+├── .env.example           # 配置模板
 ├── alembic/               # 数据库迁移
 ├── prompts/               # 提示词模板
 │   ├── planner/           # 大纲、人物生成
-│   ├── writer/            # 章节起草、润色
+│   ├── writer/            # 章节起草、润色、卷摘要
 │   ├── validator/         # 一致性校验
 │   └── extractor/         # 候选事实抽取
 ├── scripts/
 │   ├── demo_user_flow.py  # CLI 完整演示
 │   ├── migrate.py         # 数据库初始化
-│   └── probe_models.py    # 模型能力探测
+│   ├── probe_models.py    # 模型能力探测
+│   ├── benchmark_models.py # 模型推理速度基准测试
+│   └── smoke_test_arc_summary.py # 分层摘要冒烟测试
 ├── src/novel_agent/
 │   ├── api/               # FastAPI 路由、schemas、错误处理
 │   ├── application/       # 工作流编排 (book_flow.py 核心)
 │   ├── domain/            # 领域模型、错误、质量评估
-│   ├── infrastructure/    # LLM网关、持久化、提示词注册
+│   ├── infrastructure/    # LLM网关、持久化(含FTS5)、提示词注册
 │   └── settings.py        # Pydantic Settings 配置
 ├── templates/index.html   # Flask 前端模板
 ├── static/                # Flask 前端资源
-├── tests/                 # 单测(5) + 集成测试(3)
+├── tests/                 # 单测(61) + 集成测试
+├── backups/               # 提示词/配置版本备份
 └── data/                  # SQLite、导出文件、探测报告 (gitignore)
 ```
 
