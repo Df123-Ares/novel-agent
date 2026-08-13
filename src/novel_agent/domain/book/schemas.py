@@ -121,7 +121,8 @@ class GenerateChapterResult(BaseModel):
     chapter: ChapterOut
     version: ChapterVersionOut
     changes: list[CandidateChangeOut]
-    change_set_id: str
+    # None when RUN_EXTRACTOR=false (extractor skipped to save 1 LLM call per chapter)
+    change_set_id: str | None = None
     context_manifest: dict = Field(default_factory=dict)
     validation_issues: list[ChapterValidationIssue] = Field(default_factory=list)
     validation_summary: str = ""

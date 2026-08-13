@@ -148,6 +148,35 @@ class ConfirmedFactRow(Base, IdMixin, TimestampMixin):
     status: Mapped[str] = mapped_column(String(32), default="CONFIRMED")
 
 
+class ArcSummaryRow(Base, IdMixin, TimestampMixin):
+    """Hierarchical summary for long-novel context compression.
+
+    Every `arc_size` confirmed chapters (default 10) triggers an arc summary
+    covering that volume. Injected into `_build_chapter_context` so chapter N
+    can see plot developments from chapters N-50, N-30, N-20 — not just the
+    last 3 chapter summaries.
+    """
+
+    __tablename__ = "arc_summaries"
+
+    book_id: Mapped[str] = mapped_column(ForeignKey("books.id"), index=True)
+    # 1-based volume index: arc 1 covers chapters 1..arc_size, arc 2 covers
+    # arc_size+1..2*arc_size, etc.
+    arc_index: Mapped[int] = mapped_column(Integer, index=True)
+    # inclusive chapter range this summary covers
+    chapter_start: Mapped[int] = mapped_column(Integer)
+    chapter_end: Mapped[int] = mapped_column(Integer)
+    # "arc" (10-chapter) or "mega" (50-chapter). mega covers 5 arcs.
+    level: Mapped[str] = mapped_column(String(16), default="arc")
+    summary: Mapped[str] = mapped_column(Text)
+    char_count: Mapped[int] = mapped_column(Integer, default=0)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+    __table_args__ = (
+        UniqueConstraint("book_id", "arc_index", "level", name="uq_arc_summaries_per_book_level"),
+    )
+
+
 class TaskRow(Base, IdMixin, TimestampMixin):
     __tablename__ = "tasks"
 

@@ -129,7 +129,7 @@ def api_auto_select():
             "ok": False,
             "current": settings.ollama_model,
             "models": [],
-            "error": "本机未检测到任何模型。请先运行: ollama pull deepseek-r1:8b",
+            "error": "本机未检测到任何模型。请先运行: ollama pull qwen2.5:7b-instruct",
         })
     tested: list[str] = []
     chosen = None

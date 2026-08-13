@@ -33,11 +33,24 @@ def db_url(tmp_path: Path) -> str:
 
 
 def test_writer_num_predict_scales_with_target() -> None:
-    settings = Settings(writer_num_predict_floor=4096, writer_num_predict_ceil=12288)
-    assert book_flow._writer_num_predict(800, settings) == 4096
-    big = book_flow._writer_num_predict(3333, settings)
-    assert big >= 4096
-    assert big == min(12288, int(3333 * 1.6) + 1024)
+    settings = Settings(
+        writer_num_predict_floor=4096,
+        writer_num_predict_ceil=12288,
+        context_limit=6144,
+    )
+    # With empty messages, budget = 6144 - 0 - 512 = 5632
+    assert book_flow._writer_num_predict(800, settings, []) == 4096  # floor
+    big = book_flow._writer_num_predict(3333, settings, [])
+    # scaled = 3333*1.6+1024 = 6356, budget = 5632 -> min = 5632
+    assert big == 5632
+    # With large prompt, budget shrinks below floor: num_predict MUST shrink to
+    # budget (3132) instead of clamping to floor (4096). Forcing floor would
+    # push prompt+output past num_ctx and cause silent prompt truncation, which
+    # breaks JSON schema validation and triggers slow retry loops.
+    long_messages = [{"content": "x" * 5000}]
+    small = book_flow._writer_num_predict(3333, settings, long_messages)
+    # prompt_tokens = 5000*0.5 = 2500, budget = 6144-2500-512 = 3132 < floor 4096
+    assert small == 3132
 
 
 def test_complete_requires_all_confirmed(db_url: str) -> None:

@@ -57,9 +57,26 @@ class OllamaAdapter:
             if num_predict is not None
             else self.settings.default_num_predict,
             "num_ctx": self.settings.context_limit,
+            "num_gpu": self.settings.ollama_num_gpu,
+            "temperature": temperature
+            if temperature is not None
+            else self.settings.temperature,
+            "repeat_penalty": self.settings.repeat_penalty,
+            # 采样端抑制重复：top_k/top_p 控制多样性，repeat_last_n 扩大惩罚回看窗口。
+            # 默认 repeat_last_n=64 对长文太短，跨段重复逃过惩罚。
+            "top_k": self.settings.top_k,
+            "top_p": self.settings.top_p,
+            "repeat_last_n": self.settings.repeat_last_n,
         }
-        if temperature is not None:
-            options["temperature"] = temperature
+        # tfs_z / min_p 非零值才传（0 代表禁用，与省略不等价：省略=用模型默认）
+        if self.settings.tfs_z > 0:
+            options["tfs_z"] = self.settings.tfs_z
+        if self.settings.min_p > 0:
+            options["min_p"] = self.settings.min_p
+        # mirostat 采样：v2 对长文质量稳定性有明显提升，速度影响可忽略。
+        if self.settings.ollama_mirostat > 0:
+            options["mirostat"] = self.settings.ollama_mirostat
+            options["mirostat_tau"] = self.settings.ollama_mirostat_tau
 
         kwargs: dict[str, Any] = {
             "model": model or self.model,
@@ -93,7 +110,20 @@ class OllamaAdapter:
             if num_predict is not None
             else self.settings.default_num_predict,
             "num_ctx": self.settings.context_limit,
+            "num_gpu": self.settings.ollama_num_gpu,
+            "temperature": self.settings.temperature,
+            "repeat_penalty": self.settings.repeat_penalty,
+            "top_k": self.settings.top_k,
+            "top_p": self.settings.top_p,
+            "repeat_last_n": self.settings.repeat_last_n,
         }
+        if self.settings.tfs_z > 0:
+            options["tfs_z"] = self.settings.tfs_z
+        if self.settings.min_p > 0:
+            options["min_p"] = self.settings.min_p
+        if self.settings.ollama_mirostat > 0:
+            options["mirostat"] = self.settings.ollama_mirostat
+            options["mirostat_tau"] = self.settings.ollama_mirostat_tau
         stream = self.client.chat(
             model=model or self.model,
             messages=messages,

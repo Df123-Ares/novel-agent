@@ -188,6 +188,9 @@ def test_generate_expands_short_then_marks_quality(db_url: str) -> None:
             writer_min_words_ratio=0.55,
             writer_repair_repetition=True,
             writer_max_trim_ratio=0.25,
+            run_consistency_check=True,
+            # 测试场景需要 extractor 调用以验证完整流程；默认值已改为 False 以提速生产环境
+            run_extractor=True,
         )
         result = book_flow.generate_chapter(
             session, chapter_id, gateway=gateway, settings=settings
@@ -210,18 +213,24 @@ def test_write_loop_skips_confirm_when_quality_fails(db_url: str) -> None:
     gateway = MagicMock()
     # initial + 2 repairs + extractor + validator
     gateway.chat_structured.side_effect = [
-        (always_short, {}),
-        (always_short, {}),
-        (always_short, {}),
-        (extractor, {}),
-        (validator, {}),
+        (always_short, {}),   # initial
+        (always_short, {}),   # repair 1
+        (always_short, {}),   # repair 2
+        (extractor, {}),      # extractor
+        (validator, {}),      # validator (consistency check enabled in settings)
     ]
 
     with UnitOfWork(url=db_url) as uow:
         session = uow.session
         assert session is not None
         book_id, _chapter_id = _seed_writable_chapter(session, target_words=800)
-        settings = Settings(writer_max_repair=2, writer_enforce_quality_on_confirm=True)
+        settings = Settings(
+            writer_max_repair=2,
+            writer_enforce_quality_on_confirm=True,
+            run_consistency_check=True,
+            # 测试场景需要 extractor 调用以验证完整流程；默认值已改为 False 以提速生产环境
+            run_extractor=True,
+        )
         loop = book_flow.write_chapters_loop(
             session,
             book_id,

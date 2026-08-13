@@ -51,10 +51,7 @@ python server.py
 # 4b. 启动 Flask WebUI（三模式界面，端口 7860）
 python webui.py
 
-# 4c. 启动 Gradio UI（更丰富的交互，端口 7860）
-python app_ui.py
-
-# 4d. CLI 演示（无需前端）
+# 4c. CLI 演示（无需前端）
 python scripts/demo_user_flow.py --max-chapters 3
 ```
 
@@ -84,8 +81,8 @@ python scripts/demo_user_flow.py --max-chapters 3
 | 组件 | 最低版本 | 推荐 | 说明 |
 |------|----------|------|------|
 | Python | 3.11 | 3.11+ | 运行 API/脚本/UI |
-| Ollama | 0.3.x | 最新 | `ollama pull deepseek-r1:8b` |
-| 显存 | — | **≥8 GB** | 8b 模型量化后约 5-6 GB VRAM |
+| Ollama | 0.3.x | 最新 | `ollama pull qwen2.5:7b-instruct` |
+| 显存 | — | **≥6 GB** | 7b 模型量化后约 4.7 GB VRAM |
 | 内存 | 8 GB | 16 GB+ | CPU 推理回退时需更大内存 |
 | 磁盘 | 10 GB | 20 GB+ | 模型权重 + SQLite + 导出文件 |
 
@@ -101,7 +98,7 @@ python scripts/demo_user_flow.py --max-chapters 3
 | 变量 | 默认值 | 说明 | 必填 |
 |------|--------|------|------|
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama HTTP 端点 | 是 |
-| `OLLAMA_MODEL` | `deepseek-r1:8b` | 已 `ollama pull` 的模型名 | 是 |
+| `OLLAMA_MODEL` | `qwen2.5:7b-instruct` | 已 `ollama pull` 的模型名 | 是 |
 | `OLLAMA_THINK` | `false` | 推理模型需关闭以输出纯 JSON（qwen3/qwq 必须关） | 否 |
 | `CONTEXT_LIMIT` | `6144` | 传给 Ollama 的 num_ctx；6144 可覆盖实测 prompt+输出总长，避免 4096 默认值下 >4096 token 的 prompt 被静默截断 | 否 |
 | `DEFAULT_NUM_PREDICT` | `2048` | 单次生成默认 token 上限 | 否 |
@@ -110,13 +107,16 @@ python scripts/demo_user_flow.py --max-chapters 3
 | `WORDS_SHORT` | `30000` | 短篇目标总字数 | 否 |
 | `WORDS_MEDIUM` | `120000` | 中篇目标总字数 | 否 |
 | `WORDS_LONG` | `300000` | 长篇目标总字数 | 否 |
-| `PREV_CHAPTER_TAIL_CHARS` | `1500` | 上文回溯字符数 | 否 |
-| `MAX_FACTS_IN_CONTEXT` | `50` | 上下文注入的最大事实条数 | 否 |
+| `PREV_CHAPTER_TAIL_CHARS` | `800` | 上文回溯字符数（压缩以腾出输出上下文） | 否 |
+| `MAX_FACTS_IN_CONTEXT` | `25` | 上下文注入的最大事实条数（压缩以腾出输出上下文） | 否 |
+| `MAX_CHAPTER_WORDS` | `2000` | 单章目标字数上限，大纲目标超出时自动拆章 | 否 |
+| `REPEAT_PENALTY` | `1.15` | 重复惩罚（Ollama 默认 1.1；1.15-1.25 抑制退化循环，过高可能导致词汇贫乏） | 否 |
+| `RUN_CONSISTENCY_CHECK` | `false` | 章节生成时是否运行 LLM 一致性校验（默认关以提速；润色时始终执行） | 否 |
 | `WRITER_NUM_PREDICT_FLOOR` | `4096` | 写作最小 token 预算 | 否 |
-| `WRITER_NUM_PREDICT_CEIL` | `12288` | 写作最大 token 预算 | 否 |
-| `WRITER_MIN_WORDS_RATIO` | `0.55` | 实际字数/目标字数 < 此值判定不足 | 否 |
+| `WRITER_NUM_PREDICT_CEIL` | `12288` | 写作最大 token 预算（实际由上下文余量动态裁剪） | 否 |
+| `WRITER_MIN_WORDS_RATIO` | `0.5` | 实际字数/目标字数 < 此值判定不足 | 否 |
 | `WRITER_REPAIR_REPETITION` | `true` | 是否启用重复检测+重写 | 否 |
-| `WRITER_MAX_REPAIR` | `2` | 单章最大扩写/重写轮数 | 否 |
+| `WRITER_MAX_REPAIR` | `1` | 单章最大扩写/重写轮数 | 否 |
 | `WRITER_MAX_TRIM_RATIO` | `0.25` | 去重截断比例 ≥ 此值触发重写 | 否 |
 | `WRITER_ENFORCE_QUALITY_ON_CONFIRM` | `true` | 质量不达标时自动确认是否跳过 | 否 |
 
@@ -217,7 +217,7 @@ sequenceDiagram
 # 单元测试（无需 Ollama，约 10s）
 pytest tests/unit -q
 
-# 集成测试（需本地 Ollama + deepseek-r1:8b）
+# 集成测试（需本地 Ollama + qwen2.5:7b-instruct）
 pytest tests/integration -q -m integration
 
 # 代码规范
@@ -232,7 +232,7 @@ mypy src
 | 现象 | 原因 | 解决 |
 |------|------|------|
 | `Connection refused` | Ollama 未启动 | `ollama serve` |
-| `model not found` | 未拉取模型 | `ollama pull deepseek-r1:8b` |
+| `model not found` | 未拉取模型 | `ollama pull qwen2.5:7b-instruct` |
 | `CUDA out of memory` | 显存不足 | 关闭其他进程 / 用更小量化模型 / CPU 模式 |
 | `quality_ok=false` 章节不自动确认 | 字数不足或重复过多 | 调大 `WRITER_NUM_PREDICT_CEIL` / 手动 `force=true` 确认 |
 | `VERSION_CONFLICT` | 并发修改同一实体 | 使用 `expected_version` 乐观锁重试 |
@@ -247,7 +247,6 @@ mypy src
 novel-agent/
 ├── server.py              # FastAPI 入口 (端口 8000)
 ├── webui.py               # Flask WebUI 入口 (端口 7860，三模式界面)
-├── app_ui.py              # Gradio UI 入口 (端口 7860，Notion-AI 风)
 ├── start.bat              # Windows 一键启动脚本
 ├── pyproject.toml         # 包配置 (依赖、pytest、版本)
 ├── .env.example           # 配置模板 (21 项)

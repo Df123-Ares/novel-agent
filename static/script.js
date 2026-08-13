@@ -637,12 +637,26 @@ document.getElementById('jjConfirmBtn').addEventListener('click', async function
         const data = await postJSON('/api/guided/confirm', { chapterId: jjChapterId, bookId: jjBookId, force });
         showStatus('jjConfirmStatus', `<span class="${data.error ? 'status-err' : 'status-ok'}">${escapeHtml(data.status || data.error || '')}</span>`);
         if (data.chapters && data.chapters.length) renderChapters(data.chapters);
-        if (!data.error) toast('✅ 已确认本章');
+        if (!data.error) {
+            toast('✅ 已确认本章');
+            document.getElementById('jjNextChapterRow').style.display = 'flex';
+        }
     } catch (e) {
         toast('⚠️ 确认失败：' + e.message);
     } finally {
         hideLoading(this);
     }
+});
+
+document.getElementById('jjNextChapterBtn').addEventListener('click', function() {
+    document.getElementById('jjNextChapterRow').style.display = 'none';
+    document.getElementById('jjLocateBtn').click();
+    setTimeout(() => {
+        const info = document.getElementById('jjTargetInfo');
+        if (info && !info.classList.contains('hidden')) {
+            info.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }, 200);
 });
 
 document.getElementById('jjPreviewBtn').addEventListener('click', async function() {

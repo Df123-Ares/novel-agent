@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any
 
@@ -48,8 +49,9 @@ from novel_agent.domain.tasks import TaskStatus
 from novel_agent.domain.text_quality import assess_draft_quality
 from novel_agent.infrastructure.llm.gateway import LLMGateway
 from novel_agent.infrastructure.llm.stats import record_gate
-from novel_agent.infrastructure.persistence.fts import upsert_fts
+from novel_agent.infrastructure.persistence.fts import search_relevant_facts, upsert_fts
 from novel_agent.infrastructure.persistence.models import (
+    ArcSummaryRow,
     BookRow,
     CandidateChangeRow,
     CandidateChangeSetRow,
@@ -216,7 +218,10 @@ def _persist_outline_tree(
     node: OutlineNodeLLM,
     parent_id: str | None,
     sort_order: int,
+    _counter: list[int] | None = None,
 ) -> None:
+    if _counter is None:
+        _counter = [0]
     row = OutlineNodeRow(
         id=new_id(),
         book_id=book_id,
@@ -230,8 +235,9 @@ def _persist_outline_tree(
     )
     session.add(row)
     session.flush()
-    for i, child in enumerate(node.children):
-        _persist_outline_tree(session, book_id, child, row.id, i)
+    for child in node.children:
+        _counter[0] += 1
+        _persist_outline_tree(session, book_id, child, row.id, _counter[0], _counter)
 
 
 def generate_outline(
@@ -253,9 +259,9 @@ def generate_outline(
 
     # ── dynamic chapter count by length ──
     _length_ranges = {
-        "short": {"min_arcs": 1, "max_arcs": 2, "min_ch": 2, "max_ch": 4},
-        "medium": {"min_arcs": 2, "max_arcs": 4, "min_ch": 3, "max_ch": 6},
-        "long": {"min_arcs": 3, "max_arcs": 6, "min_ch": 4, "max_ch": 8},
+        "short": {"min_arcs": 1, "max_arcs": 2, "min_ch": 2, "max_ch": 14},
+        "medium": {"min_arcs": 2, "max_arcs": 4, "min_ch": 3, "max_ch": 50},
+        "long": {"min_arcs": 3, "max_arcs": 6, "min_ch": 4, "max_ch": 120},
     }
     lr = _length_ranges.get(book.length, _length_ranges["medium"])
 
@@ -509,6 +515,17 @@ def _length_total_words(settings: Settings, length: str) -> int:
     }.get(length, settings.words_medium)
 
 
+def _clean_chapter_title(title: str) -> str:
+    """Strip LLM-generated chapter numbering prefix like '第一章：' / '第1章 ' / 'Chapter 1'."""
+    cleaned = re.sub(
+        r"^第[零一二三四五六七八九十百千\d]+[章节回卷部篇](?:\s*[:：\-\s])?",
+        "",
+        title,
+    )
+    cleaned = re.sub(r"^Chapter\s*\d+\s*[:：\-\s]?", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip() or title
+
+
 def plan_chapters(session: Session, book_id: str, *, settings: Settings | None = None) -> list[ChapterOut]:
     settings = settings or get_settings()
     book = _get_book(session, book_id)
@@ -537,21 +554,34 @@ def plan_chapters(session: Session, book_id: str, *, settings: Settings | None =
         raise PreconditionError("no chapter goals in outline", code="NO_CHAPTER_GOALS")
 
     total = _length_total_words(settings, book.length)
-    per = max(800, total // len(goals))
+    max_words = settings.max_chapter_words
+    # allocate words per goal, then split if exceeds max_chapter_words
+    alloc_per_goal = max(1200, total // len(goals))
     chapters: list[ChapterRow] = []
-    for i, node in enumerate(goals, start=1):
-        row = ChapterRow(
-            id=new_id(),
-            book_id=book_id,
-            outline_node_id=node.id,
-            number=i,
-            title=node.title,
-            goal=node.summary or node.title,
-            target_words=per,
-            status="planned",
-        )
-        session.add(row)
-        chapters.append(row)
+    for node in goals:
+        goal_words = alloc_per_goal
+        # if single goal alloc exceeds max_words, split into multiple chapters
+        n_parts = max(1, math.ceil(goal_words / max_words))
+        base = goal_words // n_parts
+        rem = goal_words % n_parts
+        for k in range(n_parts):
+            words = base + (1 if k < rem else 0)
+            title = _clean_chapter_title(node.title) if n_parts == 1 else f"{_clean_chapter_title(node.title)}（{k+1}）"
+            goal_text = node.summary or node.title
+            if n_parts > 1:
+                goal_text = f"{goal_text}（本目标共{n_parts}章，本章为第{k+1}章，只推进本章对应情节段落）"
+            row = ChapterRow(
+                id=new_id(),
+                book_id=book_id,
+                outline_node_id=node.id,
+                number=len(chapters) + 1,
+                title=title,
+                goal=goal_text,
+                target_words=words,
+                status="planned",
+            )
+            session.add(row)
+            chapters.append(row)
     book.version += 1
     session.flush()
     return [_chapter_out(c) for c in chapters]
@@ -613,7 +643,14 @@ def _build_chapter_context(
     *,
     settings: Settings,
 ) -> tuple[str, dict[str, Any]]:
-    """Assemble writing context + manifest for a chapter draft."""
+    """Assemble writing context + manifest for a chapter draft.
+
+    Facts are retrieved via RAG (FTS5 bm25 on chapter goal/title), falling back
+    to the most recent facts when RAG returns fewer than max_facts_in_context.
+    This keeps long-novel context relevant: chapter 400 can still see chapter 50
+    setting facts if they match the current goal, instead of only seeing the
+    last 50 facts which may all be from chapters 350-399.
+    """
     characters = list(
         session.scalars(select(CharacterRow).where(CharacterRow.book_id == book.id)).all()
     )
@@ -624,7 +661,29 @@ def _build_chapter_context(
             .order_by(ConfirmedFactRow.created_at)
         ).all()
     )
-    facts = all_facts[-settings.max_facts_in_context :]
+
+    # ── RAG fact retrieval ──────────────────────────────────────────────────
+    # Query from chapter goal + title so the model sees facts relevant to the
+    # current scene, not just chronologically recent ones.
+    rag_query = f"{chapter.title} {chapter.goal}".strip()
+    relevant_fact_ids = search_relevant_facts(
+        session, book.id, rag_query, limit=settings.max_facts_in_context
+    )
+    facts_by_id = {f.id: f for f in all_facts}
+    rag_facts = [facts_by_id[fid] for fid in relevant_fact_ids if fid in facts_by_id]
+    rag_ids = {f.id for f in rag_facts}
+
+    # Fallback: fill remaining slots with most recent facts not in RAG results.
+    # Preserves time-order awareness for facts RAG missed (e.g. very recent
+    # plot developments that share no keywords with the current goal).
+    remaining_slots = settings.max_facts_in_context - len(rag_facts)
+    if remaining_slots > 0:
+        recent_fallback = [
+            f for f in reversed(all_facts) if f.id not in rag_ids
+        ][:remaining_slots]
+        facts = rag_facts + recent_fallback
+    else:
+        facts = rag_facts[: settings.max_facts_in_context]
 
     confirmed_chapters = list(
         session.scalars(
@@ -644,6 +703,62 @@ def _build_chapter_context(
             summary_lines.append(f"第{ch.number}章《{ch.title}》摘要：{ver.summary}")
             summary_chapter_numbers.append(ch.number)
 
+    # ── 分层摘要注入（长程一致性核心）─────────────────────────────────────
+    # 当存在 arc_summary 时，用最近 N 卷的摘要补充最近 3 章看不到的剧情。
+    # 第 30 章能看到：第 1-10 卷摘要 + 第 11-20 卷摘要（最近 2 卷）。
+    # 第 80 章能看到：第 1-50 大卷摘要 + 第 51-60 卷 + 第 61-70 卷 + 第 71-80 卷摘要。
+    arc_summary_lines: list[str] = []
+    arc_summary_ranges: list[dict[str, int]] = []
+    if settings.arc_summaries_in_context > 0:
+        # 当前章节所属的 arc_index 之前的所有 arc 摘要（不包含当前未完成的 arc）
+        current_arc_index = (chapter.number - 1) // settings.arc_size + 1
+        arc_rows = list(
+            session.scalars(
+                select(ArcSummaryRow)
+                .where(
+                    ArcSummaryRow.book_id == book.id,
+                    ArcSummaryRow.level == "arc",
+                    ArcSummaryRow.arc_index < current_arc_index,
+                )
+                .order_by(ArcSummaryRow.arc_index.desc())
+                .limit(settings.arc_summaries_in_context)
+            ).all()
+        )
+        # Reverse to chronological order for narrative coherence
+        arc_rows.reverse()
+        for r in arc_rows:
+            arc_summary_lines.append(
+                f"第{r.arc_index}卷（第{r.chapter_start}-{r.chapter_end}章）摘要：{r.summary}"
+            )
+            arc_summary_ranges.append(
+                {"arc_index": r.arc_index, "start": r.chapter_start, "end": r.chapter_end}
+            )
+
+    mega_summary_lines: list[str] = []
+    mega_summary_ranges: list[dict[str, int]] = []
+    if settings.mega_arc_summaries_in_context > 0:
+        current_mega_index = (chapter.number - 1) // settings.mega_arc_size + 1
+        mega_rows = list(
+            session.scalars(
+                select(ArcSummaryRow)
+                .where(
+                    ArcSummaryRow.book_id == book.id,
+                    ArcSummaryRow.level == "mega",
+                    ArcSummaryRow.arc_index < current_mega_index,
+                )
+                .order_by(ArcSummaryRow.arc_index.desc())
+                .limit(settings.mega_arc_summaries_in_context)
+            ).all()
+        )
+        mega_rows.reverse()
+        for r in mega_rows:
+            mega_summary_lines.append(
+                f"第{r.arc_index}大卷（第{r.chapter_start}-{r.chapter_end}章）摘要：{r.summary}"
+            )
+            mega_summary_ranges.append(
+                {"mega_index": r.arc_index, "start": r.chapter_start, "end": r.chapter_end}
+            )
+
     prev_tail = ""
     prev_number: int | None = None
     prev_tail_len = 0
@@ -662,10 +777,42 @@ def _build_chapter_context(
                 prev_number = prev.number
                 prev_tail_len = len(prev_tail)
 
+    # ── few-shot 风格示例 ──────────────────────────────────────────────
+    # 从已确认章节中抽取一段正文作为风格参考，帮助 LLM 保持文风一致。
+    # 策略：优先取上一章开头（最新文风），若上一章无内容则取更早的确认章节。
+    style_sample = ""
+    style_sample_chapter: int | None = None
+    sample_chars = settings.few_shot_sample_chars
+    if sample_chars > 0 and chapter.number > 1:
+        sample_chapter = session.scalars(
+            select(ChapterRow).where(
+                ChapterRow.book_id == book.id,
+                ChapterRow.number == chapter.number - 1,
+                ChapterRow.status == "confirmed",
+            )
+        ).first()
+        if sample_chapter and sample_chapter.current_version_id:
+            sample_ver = session.get(ChapterVersionRow, sample_chapter.current_version_id)
+            if sample_ver and sample_ver.content:
+                # 取正文开头（开头最能体现叙事基调与节奏）
+                style_sample = sample_ver.content[:sample_chars]
+                style_sample_chapter = sample_chapter.number
+
     canon = _build_canon(book, characters, facts)
     parts = [canon]
+    # few-shot 风格示例放在 canon 之后、摘要之前（先建立风格锚点，再补充剧情上下文）
+    if style_sample:
+        parts.append(
+            f"【风格示例】以下是上一章（第{style_sample_chapter}章）的开头段落，"
+            f"请在文风、语气、节奏、描写密度上保持一致：\n{style_sample}"
+        )
+    # 大卷摘要先放（更早的、更压缩的剧情背景）
+    if mega_summary_lines:
+        parts.append("历史大卷摘要（每50章压缩）：\n" + "\n".join(mega_summary_lines))
+    if arc_summary_lines:
+        parts.append("近期卷摘要（每10章压缩）：\n" + "\n".join(arc_summary_lines))
     if summary_lines:
-        parts.append("前文摘要：\n" + "\n".join(summary_lines))
+        parts.append("前文摘要（最近3章）：\n" + "\n".join(summary_lines))
     if prev_tail:
         parts.append(
             f"上一章（第{prev_number}章）正文结尾（截断 {prev_tail_len} 字）：\n{prev_tail}"
@@ -674,9 +821,18 @@ def _build_chapter_context(
     manifest: dict[str, Any] = {
         "fact_count": len(facts),
         "fact_total": len(all_facts),
+        "rag_fact_count": len(rag_facts),
+        "fallback_fact_count": len(facts) - len(rag_facts),
+        "rag_query": rag_query[:200],
         "summary_chapter_numbers": summary_chapter_numbers,
+        "arc_summaries_injected": len(arc_summary_lines),
+        "arc_summary_ranges": arc_summary_ranges,
+        "mega_summaries_injected": len(mega_summary_lines),
+        "mega_summary_ranges": mega_summary_ranges,
         "prev_chapter_number": prev_number,
         "prev_chapter_tail_chars": prev_tail_len,
+        "few_shot_sample_chars": len(style_sample),
+        "few_shot_sample_chapter": style_sample_chapter,
         "context_chars": len(context_text),
     }
     return context_text, manifest
@@ -826,12 +982,33 @@ def write_chapters_loop(
     )
 
 
-def _writer_num_predict(target_words: int, settings: Settings, floor_from_prompt: int | None = None) -> int:
-    """Scale generation budget with planned chapter length (Chinese-heavy text)."""
+def _writer_num_predict(
+    target_words: int,
+    settings: Settings,
+    writer_messages: list[dict[str, str]] | None = None,
+    floor_from_prompt: int | None = None,
+) -> int:
+    """Calculate generation budget from available context window.
+
+    Hard cap: prompt + num_predict must not exceed context_limit - reserve.
+    When ctx is tight (large canon / long previous tail), num_predict shrinks
+    below the configured floor rather than letting Ollama silently truncate the
+    prompt — silent truncation drops the JSON tail, fails schema validation and
+    triggers slow retry loops that double per-chapter latency.
+    """
     floor = max(settings.writer_num_predict_floor, floor_from_prompt or 0)
-    # ~1.6 tokens per Chinese char + JSON wrapper headroom
+    # Estimate prompt tokens (rough: 0.5 token/char for Chinese-heavy prompt)
+    prompt_chars = sum(len(m.get("content", "")) for m in (writer_messages or []))
+    prompt_tokens = int(prompt_chars * 0.5)
+    # Reserve 512 tokens for safety margin; floor the budget at 512 so the model
+    # still produces *some* output instead of an empty string when ctx is tiny.
+    budget = max(512, settings.context_limit - prompt_tokens - 512)
+    # Scaled target (1.6 tokens/char + JSON wrapper)
     scaled = int(target_words * 1.6) + 1024
-    return max(floor, min(settings.writer_num_predict_ceil, scaled))
+    # Use floor only if it fits the remaining budget; otherwise shrink to budget
+    # to avoid Ollama truncating the prompt and triggering schema repair retries.
+    effective_floor = min(floor, budget)
+    return max(effective_floor, min(budget, scaled))
 
 
 def _min_words_for_chapter(target_words: int, settings: Settings) -> int:
@@ -1086,7 +1263,9 @@ def polish_chapter_draft(
             issue_count=len(val_issues_before),
         )
         num_predict = _writer_num_predict(
-            chapter.target_words, settings,
+            chapter.target_words,
+            settings,
+            polish_messages,
             floor_from_prompt=polish_spec.default_params.get("num_predict"),
         )
         polish_out, _ = gateway.chat_structured(
@@ -1269,6 +1448,7 @@ def generate_chapter(
         num_predict = _writer_num_predict(
             chapter.target_words,
             settings,
+            writer_messages,
             floor_from_prompt=writer_spec.default_params.get("num_predict"),
         )
         context_manifest["target_words"] = chapter.target_words
@@ -1304,83 +1484,92 @@ def generate_chapter(
         session.add(version)
         session.flush()
 
-        extractor_spec, extractor_messages = registry.render(
-            "extractor/candidate_changes.yaml",
-            chapter_id=chapter.id,
-            canon=canon,
-            content=version.content,
-        )
-        extractor_out, _ = gateway.chat_structured(
-            extractor_messages,
-            ExtractorLLMOutput,
-            temperature=extractor_spec.default_params.get("temperature", 0.2),
-            num_predict=extractor_spec.default_params.get("num_predict"),
-        )
-        change_set = CandidateChangeSetRow(
-            id=new_id(),
-            book_id=book.id,
-            chapter_id=chapter.id,
-            chapter_version_id=version.id,
-            status="PROPOSED",
-        )
-        session.add(change_set)
-        session.flush()
         change_outs: list[CandidateChangeOut] = []
-        for item in extractor_out.changes:
-            crow = CandidateChangeRow(
+        if settings.run_extractor:
+            extractor_spec, extractor_messages = registry.render(
+                "extractor/candidate_changes.yaml",
+                chapter_id=chapter.id,
+                canon=canon,
+                content=version.content,
+            )
+            extractor_out, _ = gateway.chat_structured(
+                extractor_messages,
+                ExtractorLLMOutput,
+                temperature=extractor_spec.default_params.get("temperature", 0.2),
+                num_predict=extractor_spec.default_params.get("num_predict"),
+            )
+            change_set = CandidateChangeSetRow(
                 id=new_id(),
-                change_set_id=change_set.id,
-                kind=item.kind.value if hasattr(item.kind, "value") else str(item.kind),
-                subject=item.subject,
-                claim=item.claim,
-                evidence_quote=item.evidence_quote,
-                confidence=item.confidence,
+                book_id=book.id,
+                chapter_id=chapter.id,
+                chapter_version_id=version.id,
                 status="PROPOSED",
             )
-            session.add(crow)
-            change_outs.append(
-                CandidateChangeOut(
-                    id=crow.id,
-                    kind=crow.kind,
-                    subject=crow.subject,
-                    claim=crow.claim,
-                    evidence_quote=crow.evidence_quote,
-                    confidence=crow.confidence,
-                    status=crow.status,
+            session.add(change_set)
+            session.flush()
+            for item in extractor_out.changes:
+                crow = CandidateChangeRow(
+                    id=new_id(),
+                    change_set_id=change_set.id,
+                    kind=item.kind.value if hasattr(item.kind, "value") else str(item.kind),
+                    subject=item.subject,
+                    claim=item.claim,
+                    evidence_quote=item.evidence_quote,
+                    confidence=item.confidence,
+                    status="PROPOSED",
                 )
-            )
+                session.add(crow)
+                change_outs.append(
+                    CandidateChangeOut(
+                        id=crow.id,
+                        kind=crow.kind,
+                        subject=crow.subject,
+                        claim=crow.claim,
+                        evidence_quote=crow.evidence_quote,
+                        confidence=crow.confidence,
+                        status=crow.status,
+                    )
+                )
+        else:
+            # 跳过 extractor 调用：不创建 change_set，confirm_chapter 检测不到时会直接跳过事实确认。
+            change_set = None
+            context_manifest["extractor_skipped"] = True
 
         chapter.current_version_id = version.id
         chapter.title = version.title
         chapter.status = "drafted"
         book.version += 1
 
-        # ── consistency validation ──
-        prev_summaries_parts: list[str] = []
-        confirmed_chs = list(
-            session.scalars(
-                select(ChapterRow)
-                .where(ChapterRow.book_id == book.id, ChapterRow.status == "confirmed")
-                .order_by(ChapterRow.number.desc())
-            ).all()
-        )
-        for ch in list(reversed(confirmed_chs[:3])):
-            if ch.current_version_id:
-                ver = session.get(ChapterVersionRow, ch.current_version_id)
-                if ver and ver.summary:
-                    prev_summaries_parts.append(f"第{ch.number}章《{ch.title}》：{ver.summary}")
-        prev_summaries_text = "\n".join(prev_summaries_parts) if prev_summaries_parts else "（无前文章节）"
+        # ── consistency validation (optional) ──
+        if settings.run_consistency_check:
+            prev_summaries_parts: list[str] = []
+            confirmed_chs = list(
+                session.scalars(
+                    select(ChapterRow)
+                    .where(ChapterRow.book_id == book.id, ChapterRow.status == "confirmed")
+                    .order_by(ChapterRow.number.desc())
+                ).all()
+            )
+            for ch in list(reversed(confirmed_chs[:3])):
+                if ch.current_version_id:
+                    ver = session.get(ChapterVersionRow, ch.current_version_id)
+                    if ver and ver.summary:
+                        prev_summaries_parts.append(f"第{ch.number}章《{ch.title}》：{ver.summary}")
+            prev_summaries_text = "\n".join(prev_summaries_parts) if prev_summaries_parts else "（无前文章节）"
 
-        val_issues, val_summary = _validate_chapter_draft(
-            gateway,
-            canon=canon,
-            chapter_title=version.title,
-            chapter_goal=chapter.goal or "",
-            content=version.content,
-            previous_summaries=prev_summaries_text,
-            settings=settings,
-        )
-        context_manifest["validation_issue_count"] = len(val_issues)
+            val_issues, val_summary = _validate_chapter_draft(
+                gateway,
+                canon=canon,
+                chapter_title=version.title,
+                chapter_goal=chapter.goal or "",
+                content=version.content,
+                previous_summaries=prev_summaries_text,
+                settings=settings,
+            )
+            context_manifest["validation_issue_count"] = len(val_issues)
+        else:
+            val_issues, val_summary = [], ""
+            context_manifest["validation_issue_count"] = 0
 
         result = GenerateChapterResult(
             task_id=task.id,
@@ -1395,7 +1584,7 @@ def generate_chapter(
                 word_count=version.word_count,
             ),
             changes=change_outs,
-            change_set_id=change_set.id,
+            change_set_id=change_set.id if change_set is not None else None,
             context_manifest=context_manifest,
             validation_issues=val_issues,
             validation_summary=val_summary,
@@ -1420,6 +1609,203 @@ def generate_chapter(
         task.status = TaskStatus.FAILED.value
         task.error = str(exc)
         raise
+
+
+def _arc_range_for_chapter(chapter_number: int, arc_size: int) -> tuple[int, int, int]:
+    """Return (arc_index, chapter_start, chapter_end) for the arc containing chapter_number.
+
+    arc_index is 1-based. arc 1 = chapters 1..arc_size, arc 2 = arc_size+1..2*arc_size.
+    """
+    arc_index = (chapter_number - 1) // arc_size + 1
+    chapter_start = (arc_index - 1) * arc_size + 1
+    chapter_end = arc_index * arc_size
+    return arc_index, chapter_start, chapter_end
+
+
+def generate_arc_summary(
+    session: Session,
+    book_id: str,
+    *,
+    arc_index: int,
+    level: str = "arc",
+    gateway: LLMGateway | None = None,
+    settings: Settings | None = None,
+) -> ArcSummaryRow:
+    """Generate (or regenerate) an arc/mega-arc summary covering a chapter range.
+
+    level="arc" uses arc_size (default 10 chapters).
+    level="mega" uses mega_arc_size (default 50 chapters).
+
+    Summaries are stored in arc_summaries table and indexed in FTS for retrieval.
+    """
+    settings = settings or get_settings()
+    gateway = gateway or LLMGateway(settings=settings)
+    book = _get_book(session, book_id)
+
+    size = settings.arc_size if level == "arc" else settings.mega_arc_size
+    chapter_start = (arc_index - 1) * size + 1
+    chapter_end = arc_index * size
+
+    # Fetch confirmed chapters in range
+    chapters = list(
+        session.scalars(
+            select(ChapterRow)
+            .where(
+                ChapterRow.book_id == book_id,
+                ChapterRow.number >= chapter_start,
+                ChapterRow.number <= chapter_end,
+                ChapterRow.status == "confirmed",
+            )
+            .order_by(ChapterRow.number)
+        ).all()
+    )
+    if not chapters:
+        raise PreconditionError(
+            f"no confirmed chapters in range [{chapter_start}, {chapter_end}]",
+            code="ARC_EMPTY",
+        )
+
+    chapter_payloads: list[dict[str, Any]] = []
+    for ch in chapters:
+        if not ch.current_version_id:
+            continue
+        ver = session.get(ChapterVersionRow, ch.current_version_id)
+        if ver and (ver.summary or ver.content):
+            chapter_payloads.append(
+                {
+                    "number": ch.number,
+                    "title": ch.title or ver.title or "",
+                    "summary": ver.summary or ver.content[:500],
+                }
+            )
+    if not chapter_payloads:
+        raise PreconditionError(
+            f"no chapter versions with content in range [{chapter_start}, {chapter_end}]",
+            code="ARC_EMPTY",
+        )
+
+    # Render prompt and call LLM
+    registry = PromptRegistry(settings=settings)
+    _spec, messages = registry.render(
+        "writer/arc_summary.yaml",
+        book_title=book.title,
+        genre=book.genre,
+        premise=book.premise,
+        chapter_start=chapter_start,
+        chapter_end=chapter_end,
+        chapter_count=len(chapter_payloads),
+        chapters=chapter_payloads,
+    )
+    result = gateway.chat_text(
+        messages,
+        num_predict=settings.arc_summary_num_predict,
+        temperature=0.3,
+    )
+    summary_text = (result.content or "").strip()
+    if not summary_text:
+        raise PreconditionError(
+            "arc summary LLM returned empty content",
+            code="ARC_SUMMARY_EMPTY",
+        )
+
+    # Upsert into DB (replace existing if regeneration)
+    existing = session.scalars(
+        select(ArcSummaryRow).where(
+            ArcSummaryRow.book_id == book_id,
+            ArcSummaryRow.arc_index == arc_index,
+            ArcSummaryRow.level == level,
+        )
+    ).first()
+    if existing:
+        existing.summary = summary_text
+        existing.char_count = len(summary_text)
+        existing.chapter_start = chapter_start
+        existing.chapter_end = chapter_end
+        existing.version += 1
+        row = existing
+    else:
+        row = ArcSummaryRow(
+            id=new_id(),
+            book_id=book_id,
+            arc_index=arc_index,
+            chapter_start=chapter_start,
+            chapter_end=chapter_end,
+            level=level,
+            summary=summary_text,
+            char_count=len(summary_text),
+        )
+        session.add(row)
+    session.flush()
+
+    # Index in FTS for RAG retrieval (allows cross-arc lookup by keyword)
+    upsert_fts(
+        session,
+        doc_id=f"arc_{level}:{row.id}",
+        book_id=book_id,
+        doc_type=f"arc_{level}_summary",
+        title=f"第{arc_index}{'大卷' if level == 'mega' else '卷'}摘要 (ch {chapter_start}-{chapter_end})",
+        body=summary_text,
+    )
+    return row
+
+
+def maybe_generate_arc_summaries(
+    session: Session,
+    book_id: str,
+    *,
+    just_confirmed_chapter_number: int,
+    gateway: LLMGateway | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Check if a new arc/mega-arc boundary was crossed; if so, generate summary.
+
+    Called after confirm_chapter. Returns dict with generated summary ids.
+    Skips silently if boundary not crossed or chapters incomplete.
+    """
+    settings = settings or get_settings()
+    generated: dict[str, Any] = {"arc": None, "mega": None}
+
+    # ── Arc boundary (every arc_size chapters) ────────────────────────────
+    if just_confirmed_chapter_number % settings.arc_size == 0:
+        arc_index = just_confirmed_chapter_number // settings.arc_size
+        try:
+            row = generate_arc_summary(
+                session,
+                book_id,
+                arc_index=arc_index,
+                level="arc",
+                gateway=gateway,
+                settings=settings,
+            )
+            generated["arc"] = {"arc_index": arc_index, "id": row.id, "chars": row.char_count}
+        except PreconditionError:
+            # Chapters not all confirmed yet; skip silently
+            pass
+
+    # ── Mega-arc boundary (every mega_arc_size chapters) ──────────────────
+    if (
+        settings.mega_arc_size > settings.arc_size
+        and just_confirmed_chapter_number % settings.mega_arc_size == 0
+    ):
+        mega_index = just_confirmed_chapter_number // settings.mega_arc_size
+        try:
+            row = generate_arc_summary(
+                session,
+                book_id,
+                arc_index=mega_index,
+                level="mega",
+                gateway=gateway,
+                settings=settings,
+            )
+            generated["mega"] = {
+                "mega_index": mega_index,
+                "id": row.id,
+                "chars": row.char_count,
+            }
+        except PreconditionError:
+            pass
+
+    return generated
 
 
 def confirm_chapter(
@@ -1526,11 +1912,28 @@ def confirm_chapter(
     book = _get_book(session, chapter.book_id)
     book.version += 1
     session.flush()
+
+    # Trigger hierarchical summary generation if arc boundary crossed.
+    # Best-effort: failures don't block confirm (chapter is already saved).
+    arc_generated: dict[str, Any] = {"arc": None, "mega": None}
+    try:
+        arc_generated = maybe_generate_arc_summaries(
+            session,
+            chapter.book_id,
+            just_confirmed_chapter_number=chapter.number,
+            settings=settings,
+        )
+    except Exception:
+        # Arc summary failure should not roll back the confirm transaction.
+        # The summary can be regenerated later via generate_arc_summary.
+        pass
+
     return {
         "chapter_id": chapter_id,
         "version_id": version.id,
         "status": "confirmed",
         "facts_added": facts_added,
+        "arc_summaries": arc_generated,
     }
 
 

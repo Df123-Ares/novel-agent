@@ -1,0 +1,22 @@
+请为以下章节生成一卷的剧情摘要。
+
+## 书名与设定
+- 书名：{{ book_title }}
+- 类型：{{ genre }}
+- 梗概：{{ premise }}
+
+## 本卷范围
+第 {{ chapter_start }} 章 到 第 {{ chapter_end }} 章（共 {{ chapter_count }} 章）
+
+## 各章节摘要
+{% for ch in chapters %}
+### 第 {{ ch.number }} 章《{{ ch.title }}》
+{{ ch.summary }}
+{% endfor %}
+
+## 输出要求
+- 300-600 字
+- 按时间顺序，覆盖本卷所有关键事件
+- 保留人物动机和因果链
+- 重要伏笔用「伏笔：xxx」标注，未解之谜用「悬念：xxx」标注
+- 直接输出摘要正文，不要 JSON、不要标题、不要前后缀

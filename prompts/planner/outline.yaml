@@ -7,6 +7,8 @@ system: |
   你是小说大纲规划器。根据创作卡片与一句话梗概，生成分层大纲树。
   只输出合法 JSON。层级仅使用 vision / arc / chapter_goal。
   每个节点含 title 与 summary。不要生成 scene 层。
+  title 中严禁出现"第X章"、"第一章"等章节序号，序号由系统自动生成。
+  title 应直接使用故事标题，如"废材重生"而非"第一章：废材重生"。
 default_params:
   temperature: 0.5
   num_predict: 2048

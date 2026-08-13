@@ -1,5 +1,5 @@
 prompt_id: writer.chapter_draft
-version: "2.1.0"
+version: "2.2.0"
 purpose: Generate a chapter draft as a professional novelist — literary, logical, immersive
 output_schema: WriterLLMOutput
 template_file: writer/chapter_draft.j2
