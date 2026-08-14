@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-0.2.2-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![CI](https://github.com/Novel-Agent/novel-agent/workflows/CI/badge.svg)
+![CI](https://github.com/Df123-Ares/novel-agent/actions/workflows/ci.yml/badge.svg)
 
 **本地大模型驱动的长篇小说创作辅助引擎（本地大模型优先 + RAG + 分层摘要）**
 
