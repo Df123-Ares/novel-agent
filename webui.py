@@ -16,7 +16,7 @@ _SRC = _ROOT / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from flask import Flask, jsonify, render_template, request, send_from_directory
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory, stream_with_context
 from sqlalchemy.orm import Session
 
 from novel_agent.application.workflows import book_flow
@@ -32,6 +32,8 @@ from novel_agent.settings import get_settings
 
 app = Flask(__name__)
 
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+
 # ── bootstrap ────────────────────────────────────────────────────────────────
 settings = ensure_data_dirs(get_settings())
 engine = get_engine(settings)
@@ -40,6 +42,37 @@ SessionLocal = get_session_factory(settings)
 gateway = LLMGateway(settings=settings)
 
 DATA_EXPORTS = settings.export_dir
+
+
+def _sse_response(generate_func, *, extra_headers=None):
+    """Wrap a generator into a flush-per-frame SSE response.
+
+    Flask's Response() with a generator already supports chunked
+    transfer encoding. The key fix is disabling Flask's ETag/Content-
+    Length buffering so Werkzeug sends each chunk immediately.
+    """
+    headers = {
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+
+    def _wrapped():
+        yield ":"  # SSE comment, forces initial flush
+        yield "\n\n"
+        for chunk in generate_func:
+            yield chunk
+
+    resp = Response(
+        _wrapped(),
+        mimetype="text/event-stream",
+        headers=headers,
+    )
+    # Prevent Flask from computing Content-Length (which forces buffering)
+    resp.headers.pop("Content-Length", None)
+    return resp
 
 
 def _session() -> Session:
@@ -222,6 +255,81 @@ def basic_generate():
         session.close()
 
 
+@app.route("/api/basic/generate-stream", methods=["POST"])
+def basic_generate_stream():
+    """SSE endpoint for one-click full book generation with real-time progress."""
+    data = request.get_json() or {}
+    title = (data.get("title") or "").strip()
+    length = str(data.get("length") or "short").split(" - ")[0]
+    if length not in {"short", "medium", "long"}:
+        length = "short"
+    if not title:
+        return jsonify({"success": False, "log": "❌ 请输入书名"}), 400
+
+    def generate():
+        import queue, threading
+
+        q: queue.Queue = queue.Queue()
+
+        def progress_callback(stage: str, msg: str) -> None:
+            q.put(("progress", stage, msg))
+
+        def worker():
+            session = _session()
+            try:
+                book = book_flow.create_book(
+                    session,
+                    CreateBookRequest(
+                        title=title, genre="", style="", length=length,
+                        perspective="第三人称", tone="", premise=f"《{title}》",
+                    ),
+                )
+                session.commit()
+                q.put(("progress", "book_created", f"📖 开始创作《{title}》..."))
+
+                result = book_flow.generate_full_book(
+                    session, book.id,
+                    gateway=gateway,
+                    progress_callback=progress_callback,
+                )
+                session.commit()
+                if result["success"]:
+                    payload = {
+                        "success": True,
+                        "log": result["log"],
+                        "download": Path(result["path"]).name,
+                        "chapter_count": result.get("chapter_count", 0),
+                        "chars": result.get("chars", 0),
+                    }
+                    q.put(("done", payload))
+                else:
+                    q.put(("done", {"success": False, "log": result["log"], "error": result.get("error", "未知错误")}))
+            except Exception as exc:
+                session.rollback()
+                q.put(("error", str(exc)))
+            finally:
+                session.close()
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+        while True:
+            item = q.get(timeout=3600)
+            if item[0] == "progress":
+                _, stage, msg = item
+                yield f"event: progress\ndata: {json.dumps({'stage': stage, 'msg': msg}, ensure_ascii=False)}\n\n"
+            elif item[0] == "done":
+                _, payload = item
+                yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                break
+            elif item[0] == "error":
+                _, err = item
+                yield f"event: error\ndata: {json.dumps({'success': False, 'log': [f'❌ {err}'], 'error': err}, ensure_ascii=False)}\n\n"
+                break
+
+    return _sse_response(generate())
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  进阶版：逐步引导
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -293,6 +401,59 @@ def guided_chars_generate():
         session.close()
 
 
+@app.route("/api/guided/characters/generate-stream", methods=["POST"])
+def guided_chars_generate_stream():
+    """SSE endpoint for character generation with real-time progress events."""
+    book_id = (request.get_json() or {}).get("bookId", "")
+
+    def generate():
+        import queue, threading
+
+        q: queue.Queue = queue.Queue()
+
+        def progress_callback(stage: str, msg: str) -> None:
+            q.put(("progress", stage, msg))
+
+        def worker():
+            session = _session()
+            try:
+                chars = book_flow.generate_characters(
+                    session, book_id,
+                    gateway=gateway,
+                    progress_callback=progress_callback,
+                )
+                session.commit()
+                payload = {
+                    "status": f"✅ 人物生成成功！共 {len(chars)} 个人物",
+                    "characters": [_char_out(c) for c in chars],
+                }
+                q.put(("done", payload))
+            except Exception as exc:
+                session.rollback()
+                q.put(("error", str(exc)))
+            finally:
+                session.close()
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+        while True:
+            item = q.get(timeout=300)
+            if item[0] == "progress":
+                _, stage, msg = item
+                yield f"event: progress\ndata: {json.dumps({'stage': stage, 'msg': msg}, ensure_ascii=False)}\n\n"
+            elif item[0] == "done":
+                _, payload = item
+                yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                break
+            elif item[0] == "error":
+                _, err = item
+                yield f"event: error\ndata: {json.dumps({'error': True, 'status': f'❌ 人物生成失败：{err}', 'characters': []}, ensure_ascii=False)}\n\n"
+                break
+
+    return _sse_response(generate())
+
+
 @app.route("/api/guided/characters/list", methods=["POST"])
 def guided_chars_list():
     book_id = (request.get_json() or {}).get("bookId", "")
@@ -340,6 +501,60 @@ def guided_outline_generate():
         session.close()
 
 
+@app.route("/api/guided/outline/generate-stream", methods=["POST"])
+def guided_outline_generate_stream():
+    """SSE endpoint for outline generation with real-time progress events."""
+    book_id = (request.get_json() or {}).get("bookId", "")
+
+    def generate():
+        import queue, threading
+
+        q: queue.Queue = queue.Queue()
+
+        def progress_callback(stage: str, msg: str) -> None:
+            q.put(("progress", stage, msg))
+
+        def worker():
+            session = _session()
+            try:
+                nodes = book_flow.generate_outline(
+                    session, book_id,
+                    gateway=gateway,
+                    progress_callback=progress_callback,
+                )
+                session.commit()
+                payload = {
+                    "status": f"✅ 大纲生成成功！共 {len(nodes)} 个节点",
+                    "outline": [_outline_out(n) for n in nodes],
+                }
+                q.put(("done", payload))
+            except Exception as exc:
+                session.rollback()
+                q.put(("error", str(exc)))
+            finally:
+                session.close()
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+        while True:
+            item = q.get(timeout=300)
+            if item[0] == "progress":
+                _, stage, msg = item
+                yield f"event: progress\ndata: {json.dumps({'stage': stage, 'msg': msg}, ensure_ascii=False)}\n\n"
+            elif item[0] == "done":
+                _, payload = item
+                yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                break
+            elif item[0] == "error":
+                _, err = item
+                yield f"event: error\ndata: {json.dumps({'error': True, 'status': f'❌ 大纲生成失败：{err}', 'outline': []}, ensure_ascii=False)}\n\n"
+                break
+
+    return _sse_response(generate())
+
+
+
 @app.route("/api/guided/outline/list", methods=["POST"])
 def guided_outline_list():
     book_id = (request.get_json() or {}).get("bookId", "")
@@ -384,6 +599,58 @@ def guided_plan():
         return jsonify({"error": True, "status": f"❌ 章节规划失败：{exc}", "chapters": []})
     finally:
         session.close()
+
+
+@app.route("/api/guided/plan-stream", methods=["POST"])
+def guided_plan_stream():
+    """SSE endpoint for chapter planning with real-time progress events."""
+    book_id = (request.get_json() or {}).get("bookId", "")
+
+    def generate():
+        import queue, threading
+
+        q: queue.Queue = queue.Queue()
+
+        def progress_callback(stage: str, msg: str) -> None:
+            q.put(("progress", stage, msg))
+
+        def worker():
+            session = _session()
+            try:
+                chapters = book_flow.plan_chapters(
+                    session, book_id,
+                    progress_callback=progress_callback,
+                )
+                session.commit()
+                payload = {
+                    "status": f"✅ 章节规划完成！共 {len(chapters)} 章",
+                    "chapters": [_chapter_out(c) for c in chapters],
+                }
+                q.put(("done", payload))
+            except Exception as exc:
+                session.rollback()
+                q.put(("error", str(exc)))
+            finally:
+                session.close()
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+        while True:
+            item = q.get(timeout=300)
+            if item[0] == "progress":
+                _, stage, msg = item
+                yield f"event: progress\ndata: {json.dumps({'stage': stage, 'msg': msg}, ensure_ascii=False)}\n\n"
+            elif item[0] == "done":
+                _, payload = item
+                yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                break
+            elif item[0] == "error":
+                _, err = item
+                yield f"event: error\ndata: {json.dumps({'error': True, 'status': f'❌ 章节规划失败：{err}', 'chapters': []}, ensure_ascii=False)}\n\n"
+                break
+
+    return _sse_response(generate())
 
 
 def _chapter_out(ch) -> dict:
@@ -480,6 +747,57 @@ def guided_write():
         return jsonify({"error": True, "status": f"❌ 生成失败：{exc}", "content": ""})
     finally:
         session.close()
+
+
+@app.route("/api/guided/write-stream", methods=["POST"])
+def guided_write_stream():
+    """SSE endpoint for chapter generation with real-time progress events."""
+    chapter_id = (request.get_json() or {}).get("chapterId", "")
+
+    def generate():
+        import queue, threading
+
+        q: queue.Queue = queue.Queue()
+
+        def progress_callback(stage: str, msg: str) -> None:
+            q.put(("progress", stage, msg))
+
+        def worker():
+            session = _session()
+            try:
+                result = book_flow.generate_chapter(
+                    session, chapter_id,
+                    gateway=gateway,
+                    progress_callback=progress_callback,
+                )
+                session.commit()
+                q.put(("done", result))
+            except Exception as exc:
+                session.rollback()
+                q.put(("error", str(exc)))
+            finally:
+                session.close()
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+        # Send SSE events as they arrive
+        while True:
+            item = q.get(timeout=300)
+            if item[0] == "progress":
+                _, stage, msg = item
+                yield f"event: progress\ndata: {json.dumps({'stage': stage, 'msg': msg}, ensure_ascii=False)}\n\n"
+            elif item[0] == "done":
+                _, result = item
+                payload = _write_result(result)
+                yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                break
+            elif item[0] == "error":
+                _, err = item
+                yield f"event: error\ndata: {json.dumps({'error': True, 'status': f'❌ 生成失败：{err}'}, ensure_ascii=False)}\n\n"
+                break
+
+    return _sse_response(generate())
 
 
 @app.route("/api/guided/polish", methods=["POST"])
@@ -693,4 +1011,5 @@ def advanced_generate():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=7860, debug=False, threaded=True)
+    port = 7860
+    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)

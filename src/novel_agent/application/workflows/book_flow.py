@@ -133,6 +133,37 @@ def _get_book(session: Session, book_id: str) -> BookRow:
     return row
 
 
+def _persist_failed_task(
+    session: Session,
+    task_id: str,
+    book_id: str,
+    kind: str,
+    error: str,
+    *,
+    chapter_id: str | None = None,
+    idempotency_key: str | None = None,
+) -> None:
+    """Rollback all pending changes, re-create just the failed task, and commit it.
+
+    Without this helper, a task marked FAILED inside an except block gets rolled
+    back together with the partial data (versions, change sets, ...), leaving a
+    zombie RUNNING task in the DB that the caller's rollback never sees.
+    """
+    session.rollback()
+    session.expunge_all()
+    failed_task = TaskRow(
+        id=task_id,
+        book_id=book_id,
+        chapter_id=chapter_id,
+        kind=kind,
+        status=TaskStatus.FAILED.value,
+        error=error,
+        idempotency_key=idempotency_key,
+    )
+    session.add(failed_task)
+    session.commit()
+
+
 def _delete_book_chapters(session: Session, book_id: str) -> None:
     """Delete a book's chapters with all dependent rows (facts / change sets / versions / FTS).
 
@@ -246,13 +277,20 @@ def generate_outline(
     *,
     gateway: LLMGateway | None = None,
     settings: Settings | None = None,
+    progress_callback: Callable[[str, str], None] | None = None,
 ) -> list[OutlineNodeOut]:
     settings = settings or get_settings()
     gateway = gateway or LLMGateway(settings=settings)
     book = _get_book(session, book_id)
+
+    def _emit(stage: str, msg: str) -> None:
+        if progress_callback:
+            progress_callback(stage, msg)
+
     if book.outline_locked:
         raise PreconditionError("outline is locked", code="OUTLINE_LOCKED")
 
+    _emit("init", "清空旧大纲与章节...")
     # clear existing nodes / dependent chapters
     _delete_book_chapters(session, book_id)
     _delete_book_outline(session, book_id)
@@ -265,6 +303,7 @@ def generate_outline(
     }
     lr = _length_ranges.get(book.length, _length_ranges["medium"])
 
+    _emit("context", "组装大纲提示词（含已锁定人物）...")
     # ── include character info if already locked ──
     characters_text = ""
     if book.characters_locked:
@@ -306,26 +345,29 @@ def generate_outline(
     session.add(task)
     session.flush()
     try:
+        _emit("generating", f"LLM 生成大纲（预计 {lr['min_arcs']}-{lr['max_arcs']} 卷 · 预计 40-90 秒）...")
         out, _ = gateway.chat_structured(
             messages,
             OutlineLLMOutput,
             temperature=spec.default_params.get("temperature", 0.5),
             num_predict=spec.default_params.get("num_predict"),
         )
+        _emit("persisting", "保存大纲节点到数据库...")
         _persist_outline_tree(session, book_id, out.root, None, 0)
         book.version += 1
         task.status = TaskStatus.SUCCEEDED.value
         task.result_json = json.dumps({"prompt": spec.prompt_id, "version": spec.version})
     except Exception as exc:
-        task.status = TaskStatus.FAILED.value
-        task.error = str(exc)
+        _persist_failed_task(
+            session, task.id, book_id, "outline.generate", str(exc),
+        )
         raise
 
     nodes = session.scalars(
-        select(OutlineNodeRow)
-        .where(OutlineNodeRow.book_id == book_id)
+        select(OutlineNodeRow).where(OutlineNodeRow.book_id == book_id)
         .order_by(OutlineNodeRow.sort_order)
     ).all()
+    _emit("done", f"大纲生成完成：{len(nodes)} 个节点")
     return [_outline_out(n) for n in nodes]
 
 
@@ -393,17 +435,25 @@ def generate_characters(
     *,
     gateway: LLMGateway | None = None,
     settings: Settings | None = None,
+    progress_callback: Callable[[str, str], None] | None = None,
 ) -> list[CharacterOut]:
     settings = settings or get_settings()
     gateway = gateway or LLMGateway(settings=settings)
     book = _get_book(session, book_id)
+
+    def _emit(stage: str, msg: str) -> None:
+        if progress_callback:
+            progress_callback(stage, msg)
+
     if book.characters_locked:
         raise PreconditionError("characters are locked", code="CHARACTERS_LOCKED")
 
+    _emit("init", "清空旧人物数据...")
     for c in session.scalars(select(CharacterRow).where(CharacterRow.book_id == book_id)).all():
         session.delete(c)
     session.flush()
 
+    _emit("context", "组装人物提示词...")
     registry = PromptRegistry(settings=settings)
     spec, messages = registry.render(
         "planner/characters.yaml",
@@ -422,12 +472,14 @@ def generate_characters(
     session.add(task)
     session.flush()
     try:
+        _emit("generating", "LLM 生成人物设计（主角+配角 · 预计 30-60 秒）...")
         out, _ = gateway.chat_structured(
             messages,
             CharactersLLMOutput,
             temperature=spec.default_params.get("temperature", 0.5),
             num_predict=spec.default_params.get("num_predict"),
         )
+        _emit("persisting", f"保存 {len(out.characters)} 个人物...")
         for ch in out.characters:
             session.add(
                 CharacterRow(
@@ -446,12 +498,14 @@ def generate_characters(
         task.status = TaskStatus.SUCCEEDED.value
         task.result_json = json.dumps({"count": len(out.characters)})
     except Exception as exc:
-        task.status = TaskStatus.FAILED.value
-        task.error = str(exc)
+        _persist_failed_task(
+            session, task.id, book_id, "characters.generate", str(exc),
+        )
         raise
 
     session.flush()
     rows = session.scalars(select(CharacterRow).where(CharacterRow.book_id == book_id)).all()
+    _emit("done", f"人物生成完成：{len(rows)} 个人物")
     return [_character_out(r) for r in rows]
 
 
@@ -526,16 +580,29 @@ def _clean_chapter_title(title: str) -> str:
     return cleaned.strip() or title
 
 
-def plan_chapters(session: Session, book_id: str, *, settings: Settings | None = None) -> list[ChapterOut]:
+def plan_chapters(
+    session: Session,
+    book_id: str,
+    *,
+    settings: Settings | None = None,
+    progress_callback: Callable[[str, str], None] | None = None,
+) -> list[ChapterOut]:
     settings = settings or get_settings()
     book = _get_book(session, book_id)
+
+    def _emit(stage: str, msg: str) -> None:
+        if progress_callback:
+            progress_callback(stage, msg)
+
     if not book.outline_locked:
         raise PreconditionError("outline must be locked first", code="OUTLINE_NOT_LOCKED")
     if not book.characters_locked:
         raise PreconditionError("characters must be locked first", code="CHARACTERS_NOT_LOCKED")
 
+    _emit("init", "清空旧章节规划...")
     _delete_book_chapters(session, book_id)
 
+    _emit("collect", "从大纲收集章节目标节点...")
     goals = session.scalars(
         select(OutlineNodeRow)
         .where(OutlineNodeRow.book_id == book_id, OutlineNodeRow.level == "chapter_goal")
@@ -553,6 +620,7 @@ def plan_chapters(session: Session, book_id: str, *, settings: Settings | None =
     if not goals:
         raise PreconditionError("no chapter goals in outline", code="NO_CHAPTER_GOALS")
 
+    _emit("allocating", f"字数分配：共 {len(goals)} 个情节目标...")
     total = _length_total_words(settings, book.length)
     max_words = settings.max_chapter_words
     # allocate words per goal, then split if exceeds max_chapter_words
@@ -584,6 +652,7 @@ def plan_chapters(session: Session, book_id: str, *, settings: Settings | None =
             chapters.append(row)
     book.version += 1
     session.flush()
+    _emit("done", f"章节规划完成：共 {len(chapters)} 章，总目标 {total} 字")
     return [_chapter_out(c) for c in chapters]
 
 
@@ -1025,8 +1094,13 @@ def _apply_writer_quality_loop(
     num_predict: int,
     settings: Settings,
     context_manifest: dict[str, Any],
+    progress_callback: Callable[[str, str], None] | None = None,
 ) -> WriterLLMOutput:
     """Assess draft; expand or rewrite until quality_ok or repair budget exhausted."""
+    def _emit(stage: str, msg: str) -> None:
+        if progress_callback:
+            progress_callback(stage, msg)
+
     max_repair = max(0, settings.writer_max_repair)
     expanded_count = 0
     rewritten_count = 0
@@ -1042,6 +1116,7 @@ def _apply_writer_quality_loop(
     while not quality.quality_ok and repair_attempts < max_repair:
         repair_attempts += 1
         if quality.repetition_severe or (quality.repetition_truncated and quality.too_short):
+            _emit("repair", f"重写中（第 {repair_attempts}/{max_repair} 轮）：检测到大段重复...")
             rewritten_count += 1
             rewrite_messages = writer_messages + [
                 {
@@ -1062,6 +1137,7 @@ def _apply_writer_quality_loop(
                 num_predict=num_predict,
             )
         elif quality.too_short:
+            _emit("repair", f"扩写中（第 {repair_attempts}/{max_repair} 轮）：字数不足 {len(writer_out.content)}/{min_words}...")
             expanded_count += 1
             expand_messages = writer_messages + [
                 {
@@ -1386,8 +1462,10 @@ def polish_chapter_draft(
 
         return result
     except Exception as exc:
-        task.status = TaskStatus.FAILED.value
-        task.error = str(exc)
+        _persist_failed_task(
+            session, task.id, book.id, "chapter.polish", str(exc),
+            chapter_id=chapter.id,
+        )
         raise
 
 
@@ -1398,9 +1476,14 @@ def generate_chapter(
     gateway: LLMGateway | None = None,
     settings: Settings | None = None,
     idempotency_key: str | None = None,
+    progress_callback: Callable[[str, str], None] | None = None,
 ) -> GenerateChapterResult:
     settings = settings or get_settings()
     gateway = gateway or LLMGateway(settings=settings)
+
+    def _emit(stage: str, msg: str) -> None:
+        if progress_callback:
+            progress_callback(stage, msg)
 
     if idempotency_key:
         existing = session.scalars(
@@ -1418,9 +1501,13 @@ def generate_chapter(
         raise PreconditionError("characters must be locked", code="CHARACTERS_NOT_LOCKED")
     _ensure_chapter_sequence_ok(session, chapter)
 
+    _emit("context", "构建章节上下文（RAG检索 + 分层摘要 + few-shot）...")
     canon, context_manifest = _build_chapter_context(
         session, book, chapter, settings=settings
     )
+    rag_count = context_manifest.get("rag_facts_count", 0)
+    arc_count = context_manifest.get("arc_summaries_count", 0)
+    _emit("context_done", f"上下文就绪：RAG事实 {rag_count} 条，卷摘要 {arc_count} 条")
 
     task = TaskRow(
         id=new_id(),
@@ -1455,12 +1542,16 @@ def generate_chapter(
         context_manifest["min_words"] = min_words
         context_manifest["num_predict"] = num_predict
 
+        _emit("generating", f"LLM 生成中（目标 {chapter.target_words} 字，预计 60-120 秒）...")
         writer_out, _ = gateway.chat_structured(
             writer_messages,
             WriterLLMOutput,
             temperature=writer_spec.default_params.get("temperature", 0.75),
             num_predict=num_predict,
         )
+        _emit("generating_done", f"初稿完成：{len(writer_out.content)} 字")
+
+        _emit("quality", "质量检查（字数/重复检测）...")
         writer_out = _apply_writer_quality_loop(
             gateway=gateway,
             writer_messages=writer_messages,
@@ -1470,6 +1561,7 @@ def generate_chapter(
             num_predict=num_predict,
             settings=settings,
             context_manifest=context_manifest,
+            progress_callback=progress_callback,
         )
 
         version = ChapterVersionRow(
@@ -1486,6 +1578,7 @@ def generate_chapter(
 
         change_outs: list[CandidateChangeOut] = []
         if settings.run_extractor:
+            _emit("extractor", "抽取候选事实...")
             extractor_spec, extractor_messages = registry.render(
                 "extractor/candidate_changes.yaml",
                 chapter_id=chapter.id,
@@ -1542,6 +1635,7 @@ def generate_chapter(
 
         # ── consistency validation (optional) ──
         if settings.run_consistency_check:
+            _emit("validation", "一致性校验...")
             prev_summaries_parts: list[str] = []
             confirmed_chs = list(
                 session.scalars(
@@ -1593,6 +1687,8 @@ def generate_chapter(
         task.result_json = result.model_dump_json()
         session.flush()
 
+        _emit("done", f"章节生成完成：{version.word_count} 字")
+
         # ── auto-save chapter content to exports dir ──
         settings.export_dir.mkdir(parents=True, exist_ok=True)
         safe_title = "".join(
@@ -1606,8 +1702,11 @@ def generate_chapter(
 
         return result
     except Exception as exc:
-        task.status = TaskStatus.FAILED.value
-        task.error = str(exc)
+        _persist_failed_task(
+            session, task.id, book.id, "chapter.generate", str(exc),
+            chapter_id=chapter.id,
+            idempotency_key=idempotency_key,
+        )
         raise
 
 
@@ -2112,6 +2211,7 @@ def generate_full_book(
     *,
     gateway: LLMGateway | None = None,
     settings: Settings | None = None,
+    progress_callback: Callable[[str, str], None] | None = None,
 ) -> dict[str, Any]:
     """One-click full pipeline: characters → outline → chapters → write all → complete → export.
     Returns dict with status updates and final export path."""
@@ -2122,49 +2222,54 @@ def generate_full_book(
     def _report(msg: str) -> None:
         log.append(msg)
 
-    try:
-        _report("📝 生成人物...")
-        generate_characters(session, book_id, gateway=gateway, settings=settings)
-        session.commit()
-        _report("✅ 人物生成完成")
+    def _emit(stage: str, msg: str) -> None:
+        _report(msg)
+        if progress_callback:
+            progress_callback(stage, msg)
 
-        _report("🔒 锁定人物...")
+    try:
+        _emit("characters", "📝 生成人物...")
+        generate_characters(session, book_id, gateway=gateway, settings=settings, progress_callback=progress_callback)
+        session.commit()
+        _emit("characters_done", "✅ 人物生成完成")
+
+        _emit("lock_chars", "🔒 锁定人物...")
         lock_characters(session, book_id)
         session.commit()
-        _report("✅ 人物已锁定")
+        _emit("lock_chars_done", "✅ 人物已锁定")
 
-        _report("📋 生成大纲...")
-        generate_outline(session, book_id, gateway=gateway, settings=settings)
+        _emit("outline", "📋 生成大纲...")
+        generate_outline(session, book_id, gateway=gateway, settings=settings, progress_callback=progress_callback)
         session.commit()
-        _report("✅ 大纲生成完成")
+        _emit("outline_done", "✅ 大纲生成完成")
 
-        _report("🔒 锁定大纲...")
+        _emit("lock_outline", "🔒 锁定大纲...")
         lock_outline(session, book_id)
         session.commit()
-        _report("✅ 大纲已锁定")
+        _emit("lock_outline_done", "✅ 大纲已锁定")
 
-        _report("📊 章节规划...")
-        chapters = plan_chapters(session, book_id, settings=settings)
+        _emit("plan", "📊 章节规划...")
+        chapters = plan_chapters(session, book_id, settings=settings, progress_callback=progress_callback)
         session.commit()
-        _report(f"✅ 共规划 {len(chapters)} 章")
+        _emit("plan_done", f"✅ 共规划 {len(chapters)} 章")
 
         for i, ch in enumerate(chapters):
-            _report(f"✍️ 写作第 {i+1}/{len(chapters)} 章《{ch.title}》...")
-            generate_chapter(session, ch.id, gateway=gateway, settings=settings)
+            _emit("chapter_start", f"✍️ 写作第 {i+1}/{len(chapters)} 章《{ch.title}》...")
+            generate_chapter(session, ch.id, gateway=gateway, settings=settings, progress_callback=progress_callback)
             session.commit()
             confirm_chapter(session, ch.id, force=True, settings=settings)
             session.commit()
-            _report(f"✅ 第 {i+1}/{len(chapters)} 章完成")
+            _emit("chapter_done", f"✅ 第 {i+1}/{len(chapters)} 章完成")
 
-        _report("🏁 完本...")
+        _emit("complete", "🏁 完本...")
         complete_book(session, book_id)
         session.commit()
-        _report("✅ 完本")
+        _emit("complete_done", "✅ 完本")
 
-        _report("📥 导出...")
+        _emit("export", "📥 导出...")
         export_result = export_book_txt(session, book_id, scope="all", settings=settings)
         session.commit()
-        _report(f"✅ 导出至 {export_result.path}")
+        _emit("export_done", f"✅ 导出至 {export_result.path}")
 
         return {
             "success": True,
@@ -2176,6 +2281,8 @@ def generate_full_book(
     except Exception as exc:
         session.rollback()
         _report(f"❌ 失败：{exc}")
+        if progress_callback:
+            progress_callback("error", f"❌ 失败：{exc}")
         return {"success": False, "log": log, "error": str(exc)}
 
 

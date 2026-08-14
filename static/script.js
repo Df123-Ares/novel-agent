@@ -50,6 +50,49 @@ async function postJSON(url, payload) {
     return resp.json();
 }
 
+/**
+ * 通过 POST 调用 SSE 流式接口（POST + ReadableStream 解析标准 SSE 事件）。
+ * handlers: {
+ *   onProgress: (stage, msg) => void,
+ *   onDone: (payload) => void,
+ *   onError: (payload) => void,
+ * }
+ */
+async function ssePOST(url, payload, handlers) {
+    const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+    });
+    if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split('\n\n');
+        buffer = blocks.pop() || '';
+        for (const block of blocks) {
+            if (!block.trim()) continue;
+            let evt = 'message', dataStr = '';
+            for (const line of block.split('\n')) {
+                if (line.startsWith('event:')) evt = line.slice(6).trim();
+                else if (line.startsWith('data:')) dataStr += line.slice(5).trim();
+            }
+            if (!dataStr) continue;
+            let p;
+            try { p = JSON.parse(dataStr); } catch { continue; }
+            if (evt === 'progress' && handlers.onProgress) handlers.onProgress(p.stage, p.msg);
+            else if (evt === 'done' && handlers.onDone) { handlers.onDone(p); return; }
+            else if (evt === 'error' && handlers.onError) { handlers.onError(p); return; }
+        }
+    }
+}
+
 // ========== Ollama 状态检测 ==========
 async function checkOllamaStatus() {
     const dot = document.getElementById('ollamaDot');
@@ -251,26 +294,48 @@ document.getElementById('jbGenerateBtn').addEventListener('click', async functio
     document.getElementById('jbActions').style.display = 'none';
     const logBox = document.getElementById('jbLog');
     logBox.classList.remove('hidden');
-    logBox.textContent = '📖 开始创作《' + title + '》...\n';
-    document.getElementById('jbProgressText').textContent = '生成中（整本小说，本地模型可能需要几分钟），请勿关闭页面...';
+    logBox.textContent = '';
+    document.getElementById('jbProgressText').textContent = '准备中...';
 
-    showLoading(this);
+    const btn = this;
+    showLoading(btn);
     try {
-        const data = await postJSON('/api/basic/generate', { title, length });
-        logBox.textContent = data.log || '';
-        document.getElementById('jbProgressText').textContent = data.success ? '✅ 创作完成' : '⚠️ 生成中断';
-
-        document.getElementById('jbResultLog').textContent = data.log || '';
-        if (data.success && data.download) {
-            document.getElementById('jbDownload').href = '/api/download?name=' + encodeURIComponent(data.download);
-            document.getElementById('jbActions').style.display = 'flex';
-        }
-        document.getElementById('jbResult').style.display = 'block';
+        await ssePOST('/api/basic/generate-stream', { title, length }, {
+            onProgress: (stage, msg) => {
+                logBox.textContent += msg + '\n';
+                logBox.scrollTop = logBox.scrollHeight;
+                const pt = document.getElementById('jbProgressText');
+                if (stage === 'chapter_start') pt.textContent = msg;
+                else if (stage === 'generating') pt.textContent = msg;
+                else if (stage === 'context_done') pt.textContent = msg;
+                else if (stage !== 'error') pt.textContent = msg;
+            },
+            onDone: (p) => {
+                if (p.success) {
+                    logBox.textContent += '\n✅ 创作完成！';
+                    document.getElementById('jbProgressText').textContent = '✅ 创作完成';
+                    document.getElementById('jbResultLog').textContent = (p.log || []).join('\n');
+                    if (p.download) {
+                        document.getElementById('jbDownload').href = '/api/download?name=' + encodeURIComponent(p.download);
+                        document.getElementById('jbActions').style.display = 'flex';
+                    }
+                } else {
+                    logBox.textContent += '\n⚠️ ' + (p.error || '生成中断');
+                    document.getElementById('jbProgressText').textContent = '⚠️ 生成中断';
+                    document.getElementById('jbResultLog').textContent = (p.log || []).join('\n');
+                }
+                document.getElementById('jbResult').style.display = 'block';
+            },
+            onError: (p) => {
+                logBox.textContent += '\n❌ ' + (p.error || '未知错误');
+                document.getElementById('jbProgressText').textContent = '⚠️ 请求失败';
+            },
+        });
     } catch (e) {
         logBox.textContent += '\n❌ ' + e.message;
         document.getElementById('jbProgressText').textContent = '⚠️ 请求失败';
     } finally {
-        hideLoading(this);
+        hideLoading(btn);
     }
 });
 
@@ -354,16 +419,26 @@ function renderCharacters(list) {
 const jjGenCharsBtn = document.getElementById('jjGenCharsBtn');
 jjGenCharsBtn.addEventListener('click', async function() {
     if (!requireBook()) return;
-    showLoading(this);
+    const btn = this;
+    const statusEl = document.getElementById('jjCharsStatus');
+    const stageIcon = { init: '🗑️', context: '📝', generating: '🎭', persisting: '💾', done: '✅' };
+    showLoading(btn);
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<div class="status-muted">⏳ 准备生成人物...</div>';
+    const handlers = buildSSEHandlers({
+        btn, statusEl, stageIcon,
+        onDone(payload, { progressLines, lastStage }) {
+            showStatus('jjCharsStatus', `<span class="${payload.error ? 'status-err' : 'status-ok'}">${escapeHtml(payload.status || '')}</span>`);
+            if (!payload.error) renderCharacters(payload.characters);
+            if (!payload.error) toast('✅ 人物生成完成');
+        },
+    });
     try {
-        const data = await postJSON('/api/guided/characters/generate', { bookId: jjBookId });
-        showStatus('jjCharsStatus', `<span class="${data.error ? 'status-err' : 'status-ok'}">${escapeHtml(data.status || data.error || '')}</span>`);
-        if (!data.error) renderCharacters(data.characters);
-        if (!data.error) toast('✅ 人物生成完成');
+        await ssePOST('/api/guided/characters/generate-stream', { bookId: jjBookId }, handlers);
     } catch (e) {
         showStatus('jjCharsStatus', `<span class="status-err">${escapeHtml(e.message)}</span>`);
     } finally {
-        hideLoading(this);
+        hideLoading(btn);
     }
 });
 
@@ -417,16 +492,26 @@ function renderOutlineList(nodes) {
 const jjGenOutlineBtn = document.getElementById('jjGenOutlineBtn');
 jjGenOutlineBtn.addEventListener('click', async function() {
     if (!requireBook()) return;
-    showLoading(this);
+    const btn = this;
+    const statusEl = document.getElementById('jjOutlineStatus');
+    const stageIcon = { init: '🗑️', context: '🧩', generating: '🗺️', persisting: '💾', done: '✅' };
+    showLoading(btn);
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<div class="status-muted">⏳ 准备生成大纲...</div>';
+    const handlers = buildSSEHandlers({
+        btn, statusEl, stageIcon,
+        onDone(payload) {
+            showStatus('jjOutlineStatus', `<span class="${payload.error ? 'status-err' : 'status-ok'}">${escapeHtml(payload.status || '')}</span>`);
+            if (!payload.error) renderOutlineList(payload.outline);
+            if (!payload.error) toast('✅ 大纲生成完成');
+        },
+    });
     try {
-        const data = await postJSON('/api/guided/outline/generate', { bookId: jjBookId });
-        showStatus('jjOutlineStatus', `<span class="${data.error ? 'status-err' : 'status-ok'}">${escapeHtml(data.status || data.error || '')}</span>`);
-        if (!data.error) renderOutlineList(data.outline);
-        if (!data.error) toast('✅ 大纲生成完成');
+        await ssePOST('/api/guided/outline/generate-stream', { bookId: jjBookId }, handlers);
     } catch (e) {
         showStatus('jjOutlineStatus', `<span class="status-err">${escapeHtml(e.message)}</span>`);
     } finally {
-        hideLoading(this);
+        hideLoading(btn);
     }
 });
 
@@ -477,16 +562,26 @@ function renderChapterList(list, containerId) {
 const jjPlanBtn = document.getElementById('jjPlanBtn');
 jjPlanBtn.addEventListener('click', async function() {
     if (!requireBook()) return;
-    showLoading(this);
+    const btn = this;
+    const statusEl = document.getElementById('jjPlanStatus');
+    const stageIcon = { init: '🗑️', collect: '📥', allocating: '📐', done: '✅' };
+    showLoading(btn);
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<div class="status-muted">⏳ 准备章节规划...</div>';
+    const handlers = buildSSEHandlers({
+        btn, statusEl, stageIcon,
+        onDone(payload) {
+            showStatus('jjPlanStatus', `<span class="${payload.error ? 'status-err' : 'status-ok'}">${escapeHtml(payload.status || '')}</span>`);
+            renderChapterList(payload.chapters, 'jjPlanList');
+            if (!payload.error) toast('✅ 章节规划完成');
+        },
+    });
     try {
-        const data = await postJSON('/api/guided/plan', { bookId: jjBookId });
-        showStatus('jjPlanStatus', `<span class="${data.error ? 'status-err' : 'status-ok'}">${escapeHtml(data.status || data.error || '')}</span>`);
-        renderChapterList(data.chapters, 'jjPlanList');
-        if (!data.error) toast('✅ 章节规划完成');
+        await ssePOST('/api/guided/plan-stream', { bookId: jjBookId }, handlers);
     } catch (e) {
         showStatus('jjPlanStatus', `<span class="status-err">${escapeHtml(e.message)}</span>`);
     } finally {
-        hideLoading(this);
+        hideLoading(btn);
     }
 });
 
@@ -583,25 +678,80 @@ function renderWriteResult(data) {
     }
 }
 
+/**
+ * 构造 SSE 进度面板：更新按钮文案、状态区显示最近 N 条进度。
+ * 返回 handlers 对象供 ssePOST 使用。
+ */
+function buildSSEHandlers({ btn, statusEl, stageIcon, maxLines = 6, onDone, onError, doneToast, errorStatusId }) {
+    const progressLines = [];
+    let lastStage = '';
+    return {
+        onProgress(stage, msg) {
+            const icon = stageIcon[stage] || '⏳';
+            lastStage = stage;
+            progressLines.push(`<div class="status-muted">${icon} ${escapeHtml(msg)}</div>`);
+            const shown = progressLines.slice(-maxLines);
+            statusEl.innerHTML = shown.join('') +
+                `<div class="status-muted" style="opacity:.6;font-size:11px;">（实时进度 · ${progressLines.length} 步）</div>`;
+            btn.innerHTML = `<span class="loading-spinner"></span> ${icon} ${escapeHtml(stage)}...`;
+        },
+        onDone(payload) {
+            if (onDone) onDone(payload, { progressLines, lastStage });
+        },
+        onError(payload) {
+            if (onError) onError(payload);
+            else {
+                const target = errorStatusId ? document.getElementById(errorStatusId) : statusEl;
+                if (target) {
+                    target.innerHTML = `<span class="status-err">${escapeHtml((payload.status || '') + (payload.error || ''))}</span>`;
+                    target.style.display = 'block';
+                }
+            }
+            if (doneToast && payload.error) toast('⚠️ ' + (payload.status || payload.error || '失败'));
+        },
+        getMeta() { return { progressLines, lastStage }; },
+    };
+}
+
 const jjWriteBtn = document.getElementById('jjWriteBtn');
 jjWriteBtn.addEventListener('click', async function() {
     if (!jjChapterId) {
         toast('⚠️ 请先点击「📍 定位到下一章」');
         return;
     }
-    showLoading(this);
+    const btn = this;
+    const statusEl = document.getElementById('jjWriteStatus');
+    const stageIcon = {
+        context: '🔍', context_done: '📋',
+        generating: '✍️', generating_done: '📄',
+        quality: '🩺', repair: '🔧',
+        extractor: '🧩', validation: '🔗',
+        done: '✅'
+    };
+    showLoading(btn);
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<div class="status-muted">⏳ 准备生成...</div>';
+    const handlers = buildSSEHandlers({
+        btn, statusEl, stageIcon,
+        onDone(payload, { progressLines, lastStage }) {
+            renderWriteResult(payload);
+            const summary = progressLines.length
+                ? `<div class="status-muted" style="margin-top:4px;font-size:11px;">共 ${progressLines.length} 步，最后阶段：${escapeHtml(lastStage)}</div>`
+                : '';
+            statusEl.innerHTML = escapeHtml(payload.status || '').replace(/\n/g, '<br>') + summary;
+            toast('✍️ 章节已生成');
+        },
+        onError(payload) {
+            showStatus('jjWriteStatus', `<span class="status-err">${escapeHtml((payload.status || '') + (payload.error || ''))}</span>`);
+        },
+    });
     try {
-        const data = await postJSON('/api/guided/write', { chapterId: jjChapterId });
-        if (data.error) {
-            showStatus('jjWriteStatus', `<span class="status-err">${escapeHtml((data.status || '') + (data.error || ''))}</span>`);
-            return;
-        }
-        renderWriteResult(data);
-        toast('✍️ 章节已生成');
+        await ssePOST('/api/guided/write-stream', { chapterId: jjChapterId }, handlers);
     } catch (e) {
         toast('⚠️ 生成失败：' + e.message);
+        showStatus('jjWriteStatus', `<span class="status-err">⚠️ 生成失败：${escapeHtml(e.message)}</span>`);
     } finally {
-        hideLoading(this);
+        hideLoading(btn);
     }
 });
 
