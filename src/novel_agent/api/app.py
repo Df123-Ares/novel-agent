@@ -26,7 +26,7 @@ def create_app(settings: Settings | None = None, *, database_url: str | None = N
     app = FastAPI(
         title="Novel-Agent",
         version=__version__,
-        description="Phase 1 MVP: book creation flow via /api/v1",
+        description="Reference API for external integration. UI entrypoint is webui.py (Flask, port 7860).",
     )
     app.state.settings = settings
     app.state.session_factory = factory

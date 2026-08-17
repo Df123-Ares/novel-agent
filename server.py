@@ -1,4 +1,9 @@
-"""API entrypoint."""
+"""API entrypoint (FastAPI).
+
+NOTE: this layer is kept for external API integration reference only.
+The primary UI entrypoint is webui.py (Flask, port 7860), which is the
+only service started by start.bat / start.ps1.
+"""
 
 from __future__ import annotations
 

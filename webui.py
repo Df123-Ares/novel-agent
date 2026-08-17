@@ -39,7 +39,28 @@ settings = ensure_data_dirs(get_settings())
 engine = get_engine(settings)
 create_all_tables(engine)
 SessionLocal = get_session_factory(settings)
-gateway = LLMGateway(settings=settings)
+
+# Per-model gateway cache. Gateways are stateless adapters bound to a model;
+# switching models only adds a cache entry, so concurrent requests never share
+# a half-rebuilt instance. In-flight generations keep the gateway instance
+# they captured at call time even if the model is switched mid-request.
+_gw_cache: dict[str, LLMGateway] = {}
+
+
+def _current_gateway() -> LLMGateway:
+    """Return the cached gateway for the currently selected model."""
+    model = settings.ollama_model
+    gw = _gw_cache.get(model)
+    if gw is None:
+        gw = LLMGateway(settings=settings)
+        _gw_cache[model] = gw
+    return gw
+
+
+def _gateway_for(model: str) -> LLMGateway:
+    """Select a model for subsequent requests and return its gateway."""
+    settings.ollama_model = model
+    return _current_gateway()
 
 DATA_EXPORTS = settings.export_dir
 
@@ -79,15 +100,6 @@ def _session() -> Session:
     return SessionLocal()
 
 
-def _gateway_for(model: str) -> LLMGateway:
-    """Rebuild the gateway against a user-selected model."""
-    global gateway
-    if model and model != settings.ollama_model:
-        settings.ollama_model = model
-        gateway = LLMGateway(settings=settings)
-    return gateway
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Pages
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -114,7 +126,7 @@ def download():
 
 def _installed_models() -> list[str]:
     try:
-        return gateway.adapter.list_models()
+        return _current_gateway().adapter.list_models()
     except Exception:
         return []
 
@@ -122,7 +134,7 @@ def _installed_models() -> list[str]:
 @app.route("/api/health")
 def health():
     try:
-        models = gateway.adapter.list_models()
+        models = _current_gateway().adapter.list_models()
     except Exception:
         return jsonify({"ollama": False, "model": settings.ollama_model, "reason": "request_failed"})
     model_names = [m for m in models if m]
@@ -169,7 +181,7 @@ def api_auto_select():
     passed = False
     for model in installed:
         try:
-            result = gateway.adapter.chat(
+            result = _current_gateway().adapter.chat(
                 [{"role": "user", "content": "请只回复两个字：你好"}],
                 num_predict=5,
                 temperature=0.1,
@@ -199,7 +211,7 @@ def api_auto_select():
 @app.route("/api/test-generate")
 def test_generate():
     try:
-        result = gateway.adapter.chat(
+        result = _current_gateway().adapter.chat(
             [{"role": "user", "content": "请只回复两个字：你好"}],
             num_predict=10,
             temperature=0.1,
@@ -238,7 +250,7 @@ def basic_generate():
         session.commit()
         log_lines.append("✅ 书籍创建成功")
 
-        result = book_flow.generate_full_book(session, book.id, gateway=gateway)
+        result = book_flow.generate_full_book(session, book.id, gateway=_current_gateway())
         session.commit()
         for msg in result["log"]:
             log_lines.append(msg)
@@ -289,7 +301,7 @@ def basic_generate_stream():
 
                 result = book_flow.generate_full_book(
                     session, book.id,
-                    gateway=gateway,
+                    gateway=_current_gateway(),
                     progress_callback=progress_callback,
                 )
                 session.commit()
@@ -391,7 +403,7 @@ def guided_chars_generate():
     book_id = (request.get_json() or {}).get("bookId", "")
     session = _session()
     try:
-        chars = book_flow.generate_characters(session, book_id, gateway=gateway)
+        chars = book_flow.generate_characters(session, book_id, gateway=_current_gateway())
         session.commit()
         return jsonify({"status": f"✅ 人物生成成功！共 {len(chars)} 个人物", "characters": [_char_out(c) for c in chars]})
     except Exception as exc:
@@ -419,7 +431,7 @@ def guided_chars_generate_stream():
             try:
                 chars = book_flow.generate_characters(
                     session, book_id,
-                    gateway=gateway,
+                    gateway=_current_gateway(),
                     progress_callback=progress_callback,
                 )
                 session.commit()
@@ -491,7 +503,7 @@ def guided_outline_generate():
     book_id = (request.get_json() or {}).get("bookId", "")
     session = _session()
     try:
-        nodes = book_flow.generate_outline(session, book_id, gateway=gateway)
+        nodes = book_flow.generate_outline(session, book_id, gateway=_current_gateway())
         session.commit()
         return jsonify({"status": f"✅ 大纲生成成功！共 {len(nodes)} 个节点", "outline": [_outline_out(n) for n in nodes]})
     except Exception as exc:
@@ -519,7 +531,7 @@ def guided_outline_generate_stream():
             try:
                 nodes = book_flow.generate_outline(
                     session, book_id,
-                    gateway=gateway,
+                    gateway=_current_gateway(),
                     progress_callback=progress_callback,
                 )
                 session.commit()
@@ -739,7 +751,7 @@ def guided_write():
     chapter_id = (request.get_json() or {}).get("chapterId", "")
     session = _session()
     try:
-        result = book_flow.generate_chapter(session, chapter_id, gateway=gateway)
+        result = book_flow.generate_chapter(session, chapter_id, gateway=_current_gateway())
         session.commit()
         return jsonify(_write_result(result))
     except Exception as exc:
@@ -767,7 +779,7 @@ def guided_write_stream():
             try:
                 result = book_flow.generate_chapter(
                     session, chapter_id,
-                    gateway=gateway,
+                    gateway=_current_gateway(),
                     progress_callback=progress_callback,
                 )
                 session.commit()
@@ -805,7 +817,7 @@ def guided_polish():
     chapter_id = (request.get_json() or {}).get("chapterId", "")
     session = _session()
     try:
-        result = book_flow.polish_chapter_draft(session, chapter_id, gateway=gateway)
+        result = book_flow.polish_chapter_draft(session, chapter_id, gateway=_current_gateway())
         session.commit()
         orig = result.context_manifest.get("original_word_count", "?")
         new_wc = result.context_manifest.get("polished_word_count", "?")
@@ -974,7 +986,7 @@ def advanced_generate():
             session.commit()
 
         log_lines.append("📝 生成人物...")
-        book_flow.generate_characters(session, book_id, gateway=gateway)
+        book_flow.generate_characters(session, book_id, gateway=_current_gateway())
         session.commit()
         book_flow.lock_characters(session, book_id)
         session.commit()
@@ -987,7 +999,7 @@ def advanced_generate():
 
         for i, ch in enumerate(chapters):
             log_lines.append(f"✍️ 写作第 {i+1}/{len(chapters)} 章《{ch.title}》...")
-            book_flow.generate_chapter(session, ch.id, gateway=gateway)
+            book_flow.generate_chapter(session, ch.id, gateway=_current_gateway())
             session.commit()
             book_flow.confirm_chapter(session, ch.id, force=True)
             session.commit()

@@ -100,21 +100,21 @@ python scripts/demo_user_flow.py --max-chapters 3
 | `OLLAMA_THINK` | `false` | 推理模型需关闭以输出纯 JSON（qwen3/qwq 必须关） | 否 |
 | `CONTEXT_LIMIT` | `6144` | 传给 Ollama 的 num_ctx；6144 可覆盖实测 prompt+输出总长，避免 4096 默认值下 >4096 token 的 prompt 被静默截断 | 否 |
 | `DEFAULT_NUM_PREDICT` | `2048` | 单次生成默认 token 上限 | 否 |
-| `SCHEMA_REPAIR_RETRIES` | `2` | JSON 修复重试次数 | 否 |
+| `SCHEMA_REPAIR_RETRIES` | `1` | JSON 修复重试次数 | 否 |
 | `DATABASE_URL` | `sqlite:///data/novel_agent.db` | SQLAlchemy 连接串 | 否 |
 | `WORDS_SHORT` | `30000` | 短篇目标总字数 | 否 |
 | `WORDS_MEDIUM` | `120000` | 中篇目标总字数 | 否 |
 | `WORDS_LONG` | `300000` | 长篇目标总字数 | 否 |
-| `PREV_CHAPTER_TAIL_CHARS` | `500` | 上文回溯字符数（压缩以腾出输出上下文） | 否 |
-| `MAX_FACTS_IN_CONTEXT` | `30` | 上下文注入的最大事实条数（RAG 已启用，取 30 条兜底） | 否 |
+| `PREV_CHAPTER_TAIL_CHARS` | `1500` | 上文回溯字符数（压缩以腾出输出上下文） | 否 |
+| `MAX_FACTS_IN_CONTEXT` | `50` | 上下文注入的最大事实条数（RAG 已启用，取 50 条兜底） | 否 |
 | `FEW_SHOT_SAMPLE_CHARS` | `600` | few-shot 风格示例字符数（从上一章开头抽取，0=关闭） | 否 |
-| `MAX_CHAPTER_WORDS` | `2500` | 单章目标字数上限，大纲目标超出时自动拆章 | 否 |
-| `REPEAT_PENALTY` | `1.15` | 重复惩罚（Ollama 默认 1.1；1.15-1.25 抑制退化循环，过高可能导致词汇贫乏） | 否 |
+| `MAX_CHAPTER_WORDS` | `2000` | 单章目标字数上限，大纲目标超出时自动拆章 | 否 |
+| `REPEAT_PENALTY` | `1.18` | 重复惩罚（Ollama 默认 1.1；1.18 抑制中文长文退化循环，过高 1.25+ 可能导致词汇贫乏） | 否 |
 | `RUN_CONSISTENCY_CHECK` | `false` | 章节生成时是否运行 LLM 一致性校验（默认关以提速；润色时始终执行） | 否 |
-| `WRITER_NUM_PREDICT_FLOOR` | `2500` | 写作最小 token 预算（由代码根据上下文余量动态计算） | 否 |
-| `WRITER_MIN_WORDS_RATIO` | `0.9` | 实际字数/目标字数 < 此值判定不足（0.9 = 下限2250字） | 否 |
+| `WRITER_NUM_PREDICT_FLOOR` | `3072` | 写作最小 token 预算（由代码根据上下文余量动态计算） | 否 |
+| `WRITER_MIN_WORDS_RATIO` | `0.5` | 实际字数/目标字数 < 此值判定不足（0.5 = 下限为目标字数一半，最低 400 字） | 否 |
 | `WRITER_REPAIR_REPETITION` | `true` | 是否启用重复检测+重写 | 否 |
-| `WRITER_MAX_REPAIR` | `2` | 单章最大扩写/重写轮数 | 否 |
+| `WRITER_MAX_REPAIR` | `0` | 单章最大扩写/重写轮数（默认关闭以提速；重复问题已在采样端抑制 + 后处理去重） | 否 |
 | `WRITER_MAX_TRIM_RATIO` | `0.25` | 去重截断比例 ≥ 此值触发重写 | 否 |
 | `WRITER_ENFORCE_QUALITY_ON_CONFIRM` | `true` | 质量不达标时自动确认是否跳过 | 否 |
 | `ARC_SUMMARIES_IN_CONTEXT` | `5` | 注入的卷摘要数量（每10章压缩） | 否 |
@@ -127,6 +127,8 @@ python scripts/demo_user_flow.py --max-chapters 3
 基础路径：`/api/v1`  
 统一响应：`{ success, data, error, meta }`  
 错误码：`NOT_FOUND(404)`, `VERSION_CONFLICT(409)`, `PRECONDITION_FAILED(412)`, `EXPORT_FORMAT(412)`, `INTERNAL_ERROR(500)`
+
+> ⚠️ **状态说明**：FastAPI 层（`server.py`）仅保留作外部 API 集成参考。主要使用入口是 WebUI（`webui.py`，端口 7860），一键启动脚本只启动后者。
 
 ### 核心端点（22 个，完整列表见 `/docs`）
 
@@ -233,8 +235,8 @@ sequenceDiagram
 
 | 机制 | 触发条件 | 行为 |
 |------|----------|------|
-| **字数达标** | `actual_words / target_words < WRITER_MIN_WORDS_RATIO (0.9)` | `quality_ok=false`，自动扩写（最多 `WRITER_MAX_REPAIR=2` 轮） |
-| **重复检测** | 连续 n-gram 重复/循环复读 | 截断重复段，若截断比例 ≥ `WRITER_MAX_TRIM_RATIO (0.25)` 触发重写 |
+| **字数达标** | `actual_words / target_words < WRITER_MIN_WORDS_RATIO (0.5)` | `quality_ok=false`，自动扩写（最多 `WRITER_MAX_REPAIR=0` 轮，默认关闭） |
+| **重复检测** | 连续 n-gram 重复/循环复读/跨段重复句 | 截断重复段、删除后出现的重复句；若截断比例 ≥ `WRITER_MAX_TRIM_RATIO (0.25)` 触发重写 |
 | **一致性校验** | 章节生成后自动运行 | 抽取候选事实 → 对比已确认事实库 → 产出 `error/warning/info` 级问题 |
 | **润色修复** | 手动点击"修复+润色" | 基于校验问题定向重写，输出修复前后对比 |
 | **确认门禁** | `quality_ok=false` 时 | 默认跳过自动确认；`force=true` 可强制通过（需配置允许） |
