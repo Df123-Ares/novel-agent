@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from novel_agent.domain.text_quality import fix_repetitive_text
+from novel_agent.domain.text_quality import (
+    find_duplicate_sentences,
+    fix_repetitive_text,
+    strip_duplicate_sentences,
+)
 
 
 def test_no_false_positive_on_normal_prose() -> None:
@@ -17,6 +21,64 @@ def test_no_false_positive_on_normal_prose() -> None:
     fixed = fix_repetitive_text(text)
     assert fixed.truncated is False
     assert fixed.text == text
+
+
+def test_find_non_adjacent_duplicate_sentence() -> None:
+    """Same sentence repeated in a later paragraph is reported once."""
+    dup = "林默推开门，走进了那间昏暗的档案室。"
+    text = (
+        f"{dup}他打开台灯，开始翻阅卷宗。\n\n"
+        "陆远敲了敲窗玻璃，递进来一杯热茶。\n\n"
+        f"{dup}他低头继续翻看下一册档案。"
+    )
+    found = find_duplicate_sentences(text)
+    assert len(found) == 1
+    assert dup in found[0]
+
+
+def test_strip_non_adjacent_duplicate_sentence() -> None:
+    dup = "林默推开门，走进了那间昏暗的档案室。"
+    text = (
+        f"{dup}他打开台灯，开始翻阅卷宗。\n\n"
+        "陆远敲了敲窗玻璃，递进来一杯热茶。\n\n"
+        f"{dup}他低头继续翻看下一册档案。"
+    )
+    stripped, removed = strip_duplicate_sentences(text)
+    assert removed == 1
+    assert stripped.count(dup) == 1
+    assert "陆远" in stripped
+
+
+def test_strip_fuzzy_near_duplicate_sentence() -> None:
+    """Slightly reworded copy is removed, original kept."""
+    first = "他沉默了片刻，才开口回答陆远的问题。"
+    reworded = "他沉默了片刻，才开口回答陆远的问题呢。"
+    text = f"{first}\n\n{reworded}"
+    stripped, removed = strip_duplicate_sentences(text)
+    assert removed == 1
+    assert stripped.count("他沉默了片刻") == 1
+
+
+def test_short_sentences_never_removed() -> None:
+    """Trivial dialogue tags and short sentences are never deduped."""
+    tags = "他说。\n\n嗯。\n\n好。\n\n走吧。\n\n他点点头。"
+    found = find_duplicate_sentences(tags)
+    assert found == []
+    stripped, removed = strip_duplicate_sentences(tags)
+    assert removed == 0
+    assert stripped == tags
+
+
+def test_duplicate_sentence_participates_in_quality_gate() -> None:
+    """Later repeated sentence is trimmed and flagged as truncated."""
+    dup = "他缓缓站起身，环顾四周，确认没有异样。"
+    text = (
+        "林默走进灯塔。" + dup + "他继续向上攀登。" + dup + "他加快脚步。" + dup
+    )
+    fixed = fix_repetitive_text(text)
+    assert fixed.truncated is True
+    assert fixed.text.count(dup) == 1
+    assert "duplicate_sentence" in fixed.reason
 
 
 def test_trims_block_loop() -> None:

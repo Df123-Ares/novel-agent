@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
@@ -287,6 +288,97 @@ def _find_abc_cycle(text: str, min_unit: int = 30) -> int | None:
     return None
 
 
+def _split_sentences(text: str) -> list[str]:
+    """Split text into sentences on 。！？.!? while keeping delimiters."""
+    parts = re.split(r"(?<=[。！？\.!?])", text)
+    return [p for p in parts if p.strip()]
+
+
+def _is_duplicate_sentence(key: str, kept_keys: list[str], similarity: float) -> bool:
+    """True if key is a near-duplicate of any previously kept sentence."""
+    for prev in kept_keys:
+        if abs(len(prev) - len(key)) > max(12, int(0.15 * max(len(prev), len(key)))):
+            continue
+        if SequenceMatcher(None, prev, key).ratio() >= similarity:
+            return True
+    return False
+
+
+def _iter_sentences(text: str) -> Iterator[tuple[int, int, str]]:
+    """Yield (paragraph_index, sentence_index, sentence) for non-empty sentences."""
+    for pi, para in enumerate(_split_paragraphs(text)):
+        for si, sent in enumerate(_split_sentences(para)):
+            yield pi, si, sent
+
+
+def find_duplicate_sentences(
+    text: str,
+    *,
+    min_len: int = 8,
+    similarity: float = 0.92,
+) -> list[str]:
+    """Return later copies of near-duplicate sentences (first occurrence kept).
+
+    Catches non-adjacent repetition that paragraph-level dedup misses:
+    the same sentence appearing again in a different paragraph, possibly
+    with slight rewording. Sentences shorter than min_len (after whitespace
+    normalization) are ignored to avoid removing trivial dialogue tags.
+    """
+    kept_keys: list[str] = []
+    found: list[str] = []
+    for _pi, _si, sent in _iter_sentences(text):
+        key = _norm_key(sent)
+        if len(key) < min_len:
+            continue
+        if _is_duplicate_sentence(key, kept_keys, similarity):
+            found.append(sent)
+        else:
+            kept_keys.append(key)
+    return found
+
+
+def strip_duplicate_sentences(
+    text: str,
+    *,
+    min_len: int = 8,
+    similarity: float = 0.92,
+) -> tuple[str, int]:
+    """Remove later near-duplicate sentences, keeping the first occurrence.
+
+    Returns (rebuilt text, number of sentences removed). Paragraph
+    structure is preserved; a paragraph left empty is dropped.
+    """
+    paras = _split_paragraphs(text)
+    if not paras:
+        return text, 0
+
+    kept_keys: list[str] = []
+    removed = 0
+    rebuilt: list[str] = []
+    for para in paras:
+        parts = _split_sentences(para)
+        if not parts:
+            continue
+        out: list[str] = []
+        for sent in parts:
+            key = _norm_key(sent)
+            if len(key) < min_len:
+                out.append(sent)
+                continue
+            if _is_duplicate_sentence(key, kept_keys, similarity):
+                removed += 1
+                continue
+            kept_keys.append(key)
+            out.append(sent)
+        if out:
+            rebuilt.append("".join(out))
+
+    new_text = "\n\n".join(rebuilt)
+    if text.endswith("\n"):
+        new_text += "\n"
+    return new_text, removed
+
+
 def _apply_prefix_cut(original: str, cut_at: int, reason: str) -> RepetitionFix | None:
     min_keep = max(20, len(original) // 25)
     if cut_at < min_keep:
@@ -313,7 +405,8 @@ def fix_repetitive_text(text: str) -> RepetitionFix:
     Fix repetitive prose:
     1) drop later duplicate paragraphs (non-adjacent OK)
     2) drop trailing block that already appeared earlier
-    3) truncate dense consecutive loops
+    3) drop later near-duplicate sentences (non-adjacent OK)
+    4) truncate dense consecutive loops
     """
     original = text or ""
     if not original.strip():
@@ -333,6 +426,12 @@ def fix_repetitive_text(text: str) -> RepetitionFix:
     if changed:
         working = deduped
         reasons.append(reason)
+
+    # Pass D: sentence-level later-duplicate removal (non-adjacent near-duplicates)
+    deduped, removed_count = strip_duplicate_sentences(working)
+    if removed_count > 0:
+        working = deduped
+        reasons.append("duplicate_sentence")
 
     # Pass C: consecutive loop truncation on current working text
     candidates: list[tuple[int, str]] = []
