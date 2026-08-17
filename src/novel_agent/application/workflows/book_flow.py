@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import delete, select, text
@@ -1137,7 +1138,11 @@ def _apply_writer_quality_loop(
                 num_predict=num_predict,
             )
         elif quality.too_short:
-            _emit("repair", f"扩写中（第 {repair_attempts}/{max_repair} 轮）：字数不足 {len(writer_out.content)}/{min_words}...")
+            cur_chars = len(writer_out.content)
+            _emit(
+                "repair",
+                f"扩写中（第 {repair_attempts}/{max_repair} 轮）：字数不足 {cur_chars}/{min_words}...",
+            )
             expanded_count += 1
             expand_messages = writer_messages + [
                 {
