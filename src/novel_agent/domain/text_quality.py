@@ -191,6 +191,55 @@ def _dedupe_trailing_block_vs_earlier(text: str, min_span: int = 18) -> tuple[st
     return text, False, ""
 
 
+_PUNCT = set("，。！？；：、,.!?;:—…\"'“”‘’（）()《》【】[]{}<>/\\|\t ")
+
+
+def _strip_punct(text: str) -> str:
+    return "".join(ch for ch in text if ch not in _PUNCT)
+
+
+def find_repeated_phrases(
+    text: str,
+    *,
+    min_len: int = 4,
+    max_len: int = 10,
+    min_hits: int = 3,
+    max_phrases: int = 10,
+) -> list[str]:
+    """Return frequent n-gram phrases appearing >= min_hits times.
+
+    Used to build a "banned expressions" list injected into the next
+    chapter's writing prompt, suppressing cross-chapter clichés.
+    Candidates spanning line breaks or made mostly of punctuation are
+    discarded; overlapping phrases are collapsed (a selected phrase
+    excludes anything contained in it or containing it).
+    """
+    n = len(text)
+    if n < min_len:
+        return []
+
+    counts: dict[str, int] = {}
+    for i in range(n - min_len + 1):
+        for width in range(min_len, min(max_len, n - i) + 1):
+            phrase = text[i : i + width]
+            if "\n" in phrase or "\t" in phrase:
+                continue
+            counts[phrase] = counts.get(phrase, 0) + 1
+
+    candidates = sorted(
+        ((c, p) for p, c in counts.items() if c >= min_hits and len(_strip_punct(p)) >= min_len),
+        key=lambda x: (-x[0], -len(x[1])),
+    )
+    selected: list[str] = []
+    for _count, phrase in candidates:
+        if len(selected) >= max_phrases:
+            break
+        if any(phrase in s or s in phrase for s in selected):
+            continue
+        selected.append(phrase)
+    return selected
+
+
 def _find_block_loop(text: str, min_block: int = 20, max_block: int = 160) -> int | None:
     """If a trailing region is A repeated 3+ times, keep only the first A."""
     n = len(text)

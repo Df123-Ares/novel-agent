@@ -108,6 +108,8 @@ python scripts/demo_user_flow.py --max-chapters 3
 | `PREV_CHAPTER_TAIL_CHARS` | `1500` | 上文回溯字符数（压缩以腾出输出上下文） | 否 |
 | `MAX_FACTS_IN_CONTEXT` | `50` | 上下文注入的最大事实条数（RAG 已启用，取 50 条兜底） | 否 |
 | `FEW_SHOT_SAMPLE_CHARS` | `600` | few-shot 风格示例字符数（从上一章开头抽取，0=关闭） | 否 |
+| `BANNED_PHRASES_PER_CHAPTER` | `5` | 跨章禁用表达清单条数（从最近 3 章已确认正文抽取高频短语注入提示词，0=关闭） | 否 |
+| `BANNED_PHRASE_MIN_HITS` | `3` | 短语在最近 3 章正文中出现达到该次数才纳入禁用清单 | 否 |
 | `MAX_CHAPTER_WORDS` | `2000` | 单章目标字数上限，大纲目标超出时自动拆章 | 否 |
 | `REPEAT_PENALTY` | `1.18` | 重复惩罚（Ollama 默认 1.1；1.18 抑制中文长文退化循环，过高 1.25+ 可能导致词汇贫乏） | 否 |
 | `RUN_CONSISTENCY_CHECK` | `false` | 章节生成时是否运行 LLM 一致性校验（默认关以提速；润色时始终执行） | 否 |

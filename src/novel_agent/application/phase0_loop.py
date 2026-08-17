@@ -71,6 +71,7 @@ def run_phase0_loop(
             chapter_title=chapter_title,
             target_words=target_words,
             min_words=max(400, int(target_words * settings.writer_min_words_ratio)),
+            banned_phrases=[],
         )
         run.prompt_versions[writer_spec.prompt_id] = writer_spec.version
         writer_out, _ = gateway.chat_structured(

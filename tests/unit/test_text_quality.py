@@ -6,6 +6,7 @@ from pathlib import Path
 
 from novel_agent.domain.text_quality import (
     find_duplicate_sentences,
+    find_repeated_phrases,
     fix_repetitive_text,
     strip_duplicate_sentences,
 )
@@ -160,3 +161,37 @@ def test_real_export_chapter_duplicate_tail() -> None:
     marker = "林默的脚步在夜色中回响，仿佛在诉说着一个未完的故事"
     assert fixed.text.count(marker) == 1
     assert "陆远" in fixed.text
+
+
+def test_repeated_phrases_found_but_normal_prose_clean() -> None:
+    spam = "他缓缓站起身，环顾四周。" * 3
+    phrases = find_repeated_phrases(spam)
+    assert phrases
+    assert any("缓缓站起身" in p for p in phrases)
+
+    clean = "林默推开门走进档案馆，昏黄的灯光下灰尘缓缓飘落。" * 2 + "陆远站在窗外等待。"
+    assert find_repeated_phrases(clean) == []
+
+
+def test_repeated_phrases_short_and_punct_only_filtered() -> None:
+    text = "甲乙丙" * 3
+    assert find_repeated_phrases(text) == []
+    text_punct = "。——。" * 5
+    assert find_repeated_phrases(text_punct) == []
+
+
+def test_repeated_phrases_spanning_chapters() -> None:
+    cliche = "此时，这些尘封的记忆再次浮现眼前。"
+    ch1 = "林默整理旧档案。" + cliche + "窗外下起了小雨。"
+    ch2 = "陆远翻看航海日志。" + cliche + "桌上的咖啡早已凉透。"
+    ch3 = "档案馆的灯忽明忽暗。" + cliche + "林默合上了记录本。"
+    phrases = find_repeated_phrases("\n".join([ch1, ch2, ch3]))
+    assert any(cliche[:8] in p for p in phrases)
+
+
+def test_repeated_phrases_max_limit_and_overlap_collapse() -> None:
+    phrase = "他的心跳骤然加速，呼吸变得急促起来。"
+    text = (phrase + "他按住胸口。" * 1) * 4
+    phrases = find_repeated_phrases(text, max_phrases=3)
+    assert len(phrases) <= 3
+    assert "他的心跳骤然加速" in phrases[0] or "心跳骤然加速" in phrases[0]

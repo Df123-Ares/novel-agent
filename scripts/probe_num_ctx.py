@@ -97,6 +97,7 @@ def _build_real_messages():
             target_words=chapter.target_words,
             min_words=min_words,
             chapter_goal=chapter.goal,
+            banned_phrases=[],
         )
         print(f"[probe] real prompt from book={book.title!r} chapter #{chapter.number}")
         return messages
@@ -142,6 +143,7 @@ def _synthetic_messages(big: bool = False):
         target_words=1500,
         min_words=825,
         chapter_goal="沈孤鸿与柳轻眉夜宿荒村，遇昔日仇家探子",
+        banned_phrases=[],
     )
     print(f"[probe] fallback synthetic prompt (big={big})")
     return messages

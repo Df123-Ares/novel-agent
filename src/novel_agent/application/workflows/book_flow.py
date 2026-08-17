@@ -47,7 +47,7 @@ from novel_agent.domain.story.llm_outputs import (
     WriterLLMOutput,
 )
 from novel_agent.domain.tasks import TaskStatus
-from novel_agent.domain.text_quality import assess_draft_quality
+from novel_agent.domain.text_quality import assess_draft_quality, find_repeated_phrases
 from novel_agent.infrastructure.llm.gateway import LLMGateway
 from novel_agent.infrastructure.llm.stats import record_gate
 from novel_agent.infrastructure.persistence.fts import search_relevant_facts, upsert_fts
@@ -868,6 +868,26 @@ def _build_chapter_context(
                 style_sample = sample_ver.content[:sample_chars]
                 style_sample_chapter = sample_chapter.number
 
+    # ── 禁用表达清单（跨章重复抑制）──────────────────────────────────────
+    # 将最近 3 章已确认正文拼接后抽取高频短语，注入下一章写作提示词，
+    # 阻止常见过渡句/心理描写模板跨章复用（如"他缓缓站起身，环顾四周"）。
+    banned_phrases: list[str] = []
+    if settings.banned_phrases_per_chapter > 0:
+        recent_bodies: list[str] = []
+        for ch in confirmed_chapters[:3]:
+            if not ch.current_version_id:
+                continue
+            ver = session.get(ChapterVersionRow, ch.current_version_id)
+            if ver and ver.content:
+                recent_bodies.append(ver.content)
+        if recent_bodies:
+            joined = "\n".join(recent_bodies)
+            banned_phrases = find_repeated_phrases(
+                joined,
+                min_hits=settings.banned_phrase_min_hits,
+                max_phrases=settings.banned_phrases_per_chapter,
+            )
+
     canon = _build_canon(book, characters, facts)
     parts = [canon]
     # few-shot 风格示例放在 canon 之后、摘要之前（先建立风格锚点，再补充剧情上下文）
@@ -903,6 +923,8 @@ def _build_chapter_context(
         "prev_chapter_tail_chars": prev_tail_len,
         "few_shot_sample_chars": len(style_sample),
         "few_shot_sample_chapter": style_sample_chapter,
+        "banned_phrases": banned_phrases,
+        "banned_phrases_count": len(banned_phrases),
         "context_chars": len(context_text),
     }
     return context_text, manifest
@@ -1536,6 +1558,7 @@ def generate_chapter(
             target_words=chapter.target_words,
             min_words=min_words,
             chapter_goal=chapter.goal,
+            banned_phrases=context_manifest.get("banned_phrases", []),
         )
         num_predict = _writer_num_predict(
             chapter.target_words,

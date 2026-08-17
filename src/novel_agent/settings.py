@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     # few-shot 风格示例：从已确认章节中抽取一段正文作为风格参考
     # 0 = 关闭；推荐 600~800（太短无效果，太长挤占输出上下文）
     few_shot_sample_chars: int = Field(default=600, alias="FEW_SHOT_SAMPLE_CHARS")
+    # 跨章禁用表达清单：从最近 3 章已确认正文抽取出现 >= 次的高频短语，
+    # 注入下一章写作提示词，阻止过渡句/心理模板跨章复用。
+    # 0 = 关闭；推荐 5-10。
+    banned_phrases_per_chapter: int = Field(default=5, alias="BANNED_PHRASES_PER_CHAPTER")
+    banned_phrase_min_hits: int = Field(default=3, alias="BANNED_PHRASE_MIN_HITS")
     # writing length controls
     # floor 调到 3072：2000 字目标约需 3200 tokens 输出，3072 足以覆盖，
     # 同时比 4096 节省 ~25% 生成耗时；context 不足时由 _writer_num_predict 自动收缩。
